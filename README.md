@@ -1,1 +1,1 @@
-# zenbook-duo-2024-ux8406ma-bash-daemon
+# zenbook-duo-2024-ux8406ma-daemon
