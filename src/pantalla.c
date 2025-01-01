@@ -17,7 +17,7 @@ int set_pantalla_brillo(int nivel_brillo)
 
     nivel_brillo = nivel_brillo * 4;
 
-    ejecutar_comando("echo %d > /sys/class/backlight/intel_backlight/brightness");
+    ejecutar_comando("echo %d > /sys/class/backlight/intel_backlight/brightness", nivel_brillo);
 
     return EXIT_SUCCESS;
 }
@@ -47,6 +47,9 @@ void configurarmonitores(const char *accion)
             cfg->pantalla_resolucion, cfg->pantalla_tasa_refresco
         );
     }
+
+    set_pantalla_brillo(cfg->pantalla_nivel_brillo);
+    set_brillo_teclado(cfg->teclado_nivel_brillo);
 }
 
 /* ===================================================
@@ -87,10 +90,10 @@ int pantalla_edp2_encendida(void)
  * =================================================== */
 void poner_fondo_2_monitores(void)
 {
-    ejecutar_comando("feh --bg-scale %s --bg-scale %s", cfg->pantalla_fondo_edp1, cfg->pantalla_fondo_edp2);
+    ejecutar_comando("feh --bg-scale %s --bg-scale %s &", cfg->pantalla_fondo_edp1, cfg->pantalla_fondo_edp2);
 }
 
 void poner_fondo_1_monitor(void)
 {
-    ejecutar_comando("feh --bg-scale %s", cfg->pantalla_fondo_edp1);
+    ejecutar_comando("feh --bg-scale %s &", cfg->pantalla_fondo_edp1);
 }

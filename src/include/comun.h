@@ -13,6 +13,8 @@ struct SConfiguracion
     char *pantalla_tasa_refresco;
     char *pantalla_fondo_edp1;
     char *pantalla_fondo_edp2;
+    int pantalla_nivel_brillo;
+    int teclado_nivel_brillo;
 };
 
 extern struct SConfiguracion *cfg;

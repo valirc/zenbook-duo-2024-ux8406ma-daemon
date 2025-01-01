@@ -102,11 +102,15 @@ bateria_carga_maxima = 80*/
             }
             else if (!strcmp(key, "pantalla_nivel_brillo"))
             {
-                set_pantalla_brillo(atoi(value));
+                cfg->pantalla_nivel_brillo = atoi(value);
+
+                set_pantalla_brillo(cfg->pantalla_nivel_brillo);
             }
             else if (!strcmp(key, "teclado_nivel_brillo"))
             {
-                set_brillo_teclado(atoi(value));
+                cfg->teclado_nivel_brillo = atoi(value);
+
+                set_brillo_teclado(cfg->teclado_nivel_brillo);
             }
             else if (!strcmp(key, "bateria_carga_maxima"))
             {
@@ -173,7 +177,7 @@ int main(int argc, char *argv[])
             fprintf(stderr, "Falta el nivel para set-brillo-pantalla.\n");
             return EXIT_FAILURE;
         }
-        set_pantalla_brillo(argv[2]);
+        set_pantalla_brillo(atoi(argv[2]));
     }
     else if (strcmp(command, "set-brillo-teclado") == 0)
     {
