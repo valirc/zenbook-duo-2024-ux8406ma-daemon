@@ -3,6 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdarg.h>
+#include <dirent.h>
 #include <errno.h>
 
 #include "comun.h"
@@ -23,9 +24,9 @@ int set_pantalla_brillo(int nivel_brillo)
 }
 
 /* ===================================================
- * configurarmonitores: "encender" o "apagar" eDP-2
+ * configurar_monitores: "encender" o "apagar" eDP-2
  * =================================================== */
-void configurarmonitores(const char *accion)
+void configurar_monitores(const char *accion)
 {
     if (strcmp(accion, "encender") == 0) {
         printf("Activando eDP-2...\n");
@@ -52,37 +53,37 @@ void configurarmonitores(const char *accion)
     set_brillo_teclado(cfg->teclado_nivel_brillo);
 }
 
-/* ===================================================
- * pantalla_edp2_encendida:
- * Devuelve 1 si eDP-2 está encendida, 0 si no.
- * 
- * En Bash, se basaba en 'xrandr --listmonitors | grep "Monitors: N"'
- * =================================================== */
-int pantalla_edp2_encendida(void)
-{
-    /* Usamos popen para capturar la salida de 'xrandr --listmonitors' */
-    FILE *fp = popen("xrandr --listmonitors", "r");
-    if (!fp) {
-        fprintf(stderr, "Error al ejecutar xrandr --listmonitors: %s\n", strerror(errno));
-        return 0; /* fallback a 0 si algo falla */
+int monitor_estado(const char *monitor_id) {
+    if (!monitor_id || strlen(monitor_id) == 0) {
+        fprintf(stderr, "El identificador del monitor es inválido.\n");
+        return 0;
     }
 
-    /* Buscar una línea con 'Monitors: N' y extraer N */
-    int monitors_count = 0;
-    char line[512];
-    while (fgets(line, sizeof(line), fp)) {
-        if (strncmp(line, "Monitors: ", 10) == 0) {
-            sscanf(line + 10, "%d", &monitors_count); 
-            break;
-        }
+    char monitor_path[512];
+    snprintf(monitor_path, sizeof(monitor_path), "/sys/class/drm/card1-%s/enabled", monitor_id);
+
+    /* Verificar si el archivo existe */
+    FILE *enabled_file = fopen(monitor_path, "r");
+    if (!enabled_file) {
+        fprintf(stderr, "El monitor %s no existe o no se puede acceder a %s: %s\n", 
+                monitor_id, monitor_path, strerror(errno));
+        return 0;
     }
 
-    pclose(fp);
+    /* Leer el estado del archivo "enabled" */
+    char status[16];
+    if (fgets(status, sizeof(status), enabled_file)) {
+        fclose(enabled_file);
 
-    /* Si hay 2 monitores, devolvemos 1, sino 0 */
-    return (monitors_count == 2) ? 1 : 0;
+        /* Comparar el valor leído con "enabled" */
+        return !strcmp(status, "enabled\n");
+    }
+
+    fclose(enabled_file);
+
+    /* Si no se pudo leer el estado, devolvemos 0 como fallback */
+    return 0;
 }
-
 
 /* ===================================================
  * Cuando eDP-2 se enciende, se usan 2 fondos con feh,

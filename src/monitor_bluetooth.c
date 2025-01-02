@@ -50,18 +50,18 @@ void *monitorizar_cambios_bluetooth(void *arg)
 {
     /* == 1) Estado actual == */
     int estadoTeclado  = teclado_conectado();     /* 1 conectado, 0 no conectado */
-    int estadoPantalla = pantalla_edp2_encendida(); /* 1 encendida, 0 apagada */
+    int estadoPantalla = monitor_estado("eDP-2"); /* 1 encendida, 0 apagada */
 
     /* == Lógica del script: == */
     if (estadoTeclado == 1 && estadoPantalla == 0) {
         printf("Teclado conectado. Encendiendo eDP-2...\n");
-        configurarmonitores("encender");
+        configurar_monitores("encender");
         usleep(250000); /* sleep 0.25s */
         poner_fondo_2_monitores();
     } 
     else if (estadoTeclado == 0 && estadoPantalla == 1) {
         printf("Teclado desconectado. Apagando eDP-2...\n");
-        configurarmonitores("apagar");
+        configurar_monitores("apagar");
         usleep(250000);
         poner_fondo_1_monitor();
     }
@@ -83,9 +83,9 @@ void *monitorizar_cambios_bluetooth(void *arg)
         if (strstr(line, "Connected: yes") != NULL) {
             printf("Teclado conectado\n");
             /* Revisar si eDP-2 está apagada */
-            if (!pantalla_edp2_encendida()) {
+            if (!monitor_estado("eDP-2")) {
                 printf("El teclado está conectado y eDP-2 está apagada. Encendiendo eDP-2...\n");
-                configurarmonitores("encender");
+                configurar_monitores("encender");
                 usleep(250000);
                 poner_fondo_2_monitores();
             }
@@ -93,9 +93,9 @@ void *monitorizar_cambios_bluetooth(void *arg)
         else if (strstr(line, "Connected: no") != NULL) {
             printf("Teclado desconectado\n");
             /* Revisar si eDP-2 está encendida */
-            if (pantalla_edp2_encendida()) {
+            if (monitor_estado("eDP-2")) {
                 printf("El teclado no está conectado y eDP-2 está encendida. Apagando eDP-2...\n");
-                configurarmonitores("apagar");
+                configurar_monitores("apagar");
                 usleep(250000);
                 poner_fondo_1_monitor();
             }

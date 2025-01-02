@@ -3,9 +3,9 @@
 
 int set_pantalla_brillo(int nivel_brillo);
 
-void configurarmonitores(const char *accion);
+void configurar_monitores(const char *accion);
 
-int pantalla_edp2_encendida(void);
+int monitor_estado(const char *monitor_id);
 
 void poner_fondo_2_monitores(void);
 

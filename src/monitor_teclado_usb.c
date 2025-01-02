@@ -1,8 +1,11 @@
-#include <libudev.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <libudev.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <sys/select.h> 
 
 #include "comun.h"
 #include "pantalla.h"
@@ -52,13 +55,13 @@ void *monitorizar_cambios_teclado_usb(void *arg)
 
     if (tmp) {
         printf("Teclado conectado. Encendiendo eDP-2...\n");
-        configurarmonitores("encender");
+        configurar_monitores("encender");
         usleep(250000); // sleep 0.25s
         poner_fondo_2_monitores();
     } 
     else {
         printf("Teclado desconectado. Apagando eDP-2...\n");
-        configurarmonitores("apagar");
+        configurar_monitores("apagar");
         usleep(250000);
         poner_fondo_1_monitor();
     }
@@ -87,10 +90,10 @@ void *monitorizar_cambios_teclado_usb(void *arg)
                     {
                         printf("Teclado conectado\n");
 
-                        if (pantalla_edp2_encendida())
+                        if (monitor_estado("eDP-2"))
                         {
                             printf("El teclado no está conectado y eDP-2 está encendida. Apagando eDP-2...\n");
-                            configurarmonitores("apagar");
+                            configurar_monitores("apagar");
                             usleep(250000);
                             poner_fondo_1_monitor();
                         }
@@ -99,10 +102,10 @@ void *monitorizar_cambios_teclado_usb(void *arg)
                     {
                         printf("Teclado desconectado\n");
 
-                        if (!pantalla_edp2_encendida())
+                        if (!monitor_estado("eDP-2"))
                         {
                             printf("El teclado está conectado y eDP-2 está apagada. Encendiendo eDP-2...\n");
-                            configurarmonitores("encender");
+                            configurar_monitores("encender");
                             usleep(250000);
                             poner_fondo_2_monitores();
                         }
