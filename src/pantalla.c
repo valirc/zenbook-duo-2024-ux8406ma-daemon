@@ -8,6 +8,7 @@
 
 #include "comun.h"
 #include "pantalla.h"
+#include "teclado.h"
 
 int set_pantalla_brillo(int nivel_brillo)
 {

@@ -4,6 +4,7 @@
 #include "comun.h"
 #include "pantalla.h"
 #include "teclado.h"
+#include "config.h"
 #include "monitor_bluetooth.h"
 #include "monitor_orientacion.h"
 #include "monitor_teclado_usb.h"
@@ -12,6 +13,18 @@ static AppIndicator *indicator;
 static pthread_t hilo_orientacion;
 static pthread_t hilo_bluetooth;
 static pthread_t hilo_usb;
+
+static void on_set_pantalla_brillo(GtkMenuItem *item, gpointer user_data)
+{
+    int nivel = GPOINTER_TO_INT(user_data);
+    set_pantalla_brillo(nivel);
+}
+
+static void on_set_teclado_brillo(GtkMenuItem *item, gpointer user_data)
+{
+    int nivel = GPOINTER_TO_INT(user_data);
+    set_brillo_teclado(nivel);
+}
 
 static void on_start_orientacion(GtkMenuItem *item, gpointer user_data)
 {
@@ -61,6 +74,32 @@ static GtkWidget* create_menu()
     item = gtk_menu_item_new_with_label("Monitorizar teclado USB");
     g_signal_connect(item, "activate", G_CALLBACK(on_start_usb), NULL);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    // Submenú brillo de pantalla
+    GtkWidget *submenu_pantalla = gtk_menu_new();
+    for (int i = 0; i <= 100; i += 10) {
+        char label[8];
+        snprintf(label, sizeof(label), "%d%%", i);
+        GtkWidget *br_item = gtk_menu_item_new_with_label(label);
+        g_signal_connect(br_item, "activate", G_CALLBACK(on_set_pantalla_brillo), GINT_TO_POINTER(i));
+        gtk_menu_shell_append(GTK_MENU_SHELL(submenu_pantalla), br_item);
+    }
+    GtkWidget *pantalla_menu = gtk_menu_item_new_with_label("Brillo pantalla");
+    gtk_menu_item_set_submenu(GTK_MENU_ITEM(pantalla_menu), submenu_pantalla);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), pantalla_menu);
+
+    // Submenú brillo de teclado
+    GtkWidget *submenu_teclado = gtk_menu_new();
+    for (int i = 0; i <= 3; i++) {
+        char label[4];
+        snprintf(label, sizeof(label), "%d", i);
+        GtkWidget *br_item = gtk_menu_item_new_with_label(label);
+        g_signal_connect(br_item, "activate", G_CALLBACK(on_set_teclado_brillo), GINT_TO_POINTER(i));
+        gtk_menu_shell_append(GTK_MENU_SHELL(submenu_teclado), br_item);
+    }
+    GtkWidget *teclado_menu = gtk_menu_item_new_with_label("Brillo teclado");
+    gtk_menu_item_set_submenu(GTK_MENU_ITEM(teclado_menu), submenu_teclado);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), teclado_menu);
 
     item = gtk_separator_menu_item_new();
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
