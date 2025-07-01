@@ -26,31 +26,19 @@ static void on_set_teclado_brillo(GtkMenuItem *item, gpointer user_data)
     set_brillo_teclado(nivel);
 }
 
-static void on_start_orientacion(GtkMenuItem *item, gpointer user_data)
+static void on_start_orientacion()
 {
     pthread_create(&hilo_orientacion, NULL, monitorizar_cambios_orientacion, NULL);
 }
 
-static void on_start_bluetooth(GtkMenuItem *item, gpointer user_data)
+static void on_start_bluetooth()
 {
     pthread_create(&hilo_bluetooth, NULL, monitorizar_cambios_bluetooth, NULL);
 }
 
-static void on_start_usb(GtkMenuItem *item, gpointer user_data)
+static void on_start_usb()
 {
     pthread_create(&hilo_usb, NULL, monitorizar_cambios_teclado_usb, NULL);
-}
-
-static void on_encender_edp2(GtkMenuItem *item, gpointer user_data)
-{
-    configurar_monitores("encender");
-    poner_fondo_2_monitores();
-}
-
-static void on_apagar_edp2(GtkMenuItem *item, gpointer user_data)
-{
-    configurar_monitores("apagar");
-    poner_fondo_1_monitor();
 }
 
 static void on_quit(GtkMenuItem *item, gpointer user_data)
@@ -63,17 +51,9 @@ static GtkWidget* create_menu()
     GtkWidget *menu, *item;
     menu = gtk_menu_new();
 
-    item = gtk_menu_item_new_with_label("Monitorizar orientación");
-    g_signal_connect(item, "activate", G_CALLBACK(on_start_orientacion), NULL);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
-
-    item = gtk_menu_item_new_with_label("Monitorizar bluetooth");
-    g_signal_connect(item, "activate", G_CALLBACK(on_start_bluetooth), NULL);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
-
-    item = gtk_menu_item_new_with_label("Monitorizar teclado USB");
-    g_signal_connect(item, "activate", G_CALLBACK(on_start_usb), NULL);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+    on_start_orientacion();
+    on_start_bluetooth();
+    on_start_usb();
 
     // Submenú brillo de pantalla
     GtkWidget *submenu_pantalla = gtk_menu_new();
@@ -102,14 +82,6 @@ static GtkWidget* create_menu()
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), teclado_menu);
 
     item = gtk_separator_menu_item_new();
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
-
-    item = gtk_menu_item_new_with_label("Encender eDP-2");
-    g_signal_connect(item, "activate", G_CALLBACK(on_encender_edp2), NULL);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
-
-    item = gtk_menu_item_new_with_label("Apagar eDP-2");
-    g_signal_connect(item, "activate", G_CALLBACK(on_apagar_edp2), NULL);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
 
     item = gtk_separator_menu_item_new();
