@@ -8,11 +8,12 @@
 
 #include "comun.h"
 #include "pantalla.h"
+#include "teclado.h"
 
 int set_pantalla_brillo(int nivel_brillo)
 {
-    if (nivel_brillo < 10 || nivel_brillo > 100) {
-        fprintf(stderr, "Nivel inválido. Debe ser un entero entre 10 y 100.\n");
+    if (nivel_brillo < 0 || nivel_brillo > 100) {
+        fprintf(stderr, "Nivel inválido. Debe ser un entero entre 0 y 100.\n");
         return EXIT_FAILURE;
     }
 
