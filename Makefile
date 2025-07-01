@@ -17,10 +17,13 @@ app-obj:
 	$(CC) $(INCLUDE) -o obj/monitor_bluetooth.o -c src/monitor_bluetooth.c
 	$(CC) $(INCLUDE) -o obj/monitor_orientacion.o -c src/monitor_orientacion.c
 	$(CC) $(INCLUDE) -o obj/monitor_teclado_usb.o -c src/monitor_teclado_usb.c
+	$(CC) $(INCLUDE) -o obj/config.o -c src/config.c
 	$(CC) $(INCLUDE) -o obj/main.o -c src/main.c
+	$(CC) $(INCLUDE) -o obj/gui_daemon.o -c src/gui_daemon.c
 
 app-bin:
-	$(CC) $(INCLUDE) -o bin/zbd -Wl,--export-dynamic obj/*.o ${GTK_LIB}
+	$(CC) $(INCLUDE) -o bin/zbd obj/comun.o obj/teclado.o obj/pantalla.o obj/monitor_bluetooth.o obj/monitor_orientacion.o obj/monitor_teclado_usb.o obj/config.o obj/main.o ${GTK_LIB}
+	$(CC) $(INCLUDE) -o bin/zbd-tray obj/comun.o obj/teclado.o obj/pantalla.o obj/monitor_bluetooth.o obj/monitor_orientacion.o obj/monitor_teclado_usb.o obj/config.o obj/gui_daemon.o ${GTK_LIB}
 
 instalar:
 	mkdir -p /etc/zbd/
