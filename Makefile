@@ -29,6 +29,8 @@ instalar:
 	mkdir -p /etc/zbd/
 	cp conf/* /etc/zbd/
 	cp bin/* /usr/local/bin
+	mkdir -p /usr/share/icons/gmam/
+	cp icono.svg /usr/share/icons/gmam/
 
 clean:
 	rm -f obj/* bin/*

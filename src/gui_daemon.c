@@ -103,9 +103,11 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    indicator = app_indicator_new("zbd-indicator", "computer", APP_INDICATOR_CATEGORY_APPLICATION_STATUS);
+    const gchar *icon_path = "/usr/share/icons/gmam/icono.svg";
+
+    indicator = app_indicator_new("zbd-indicator", icon_path, APP_INDICATOR_CATEGORY_APPLICATION_STATUS);
     app_indicator_set_status(indicator, APP_INDICATOR_STATUS_ACTIVE);
-    app_indicator_set_attention_icon(indicator, "computer");
+    app_indicator_set_icon_full(indicator, icon_path, "ZBD Tray");
 
     GtkWidget *menu = create_menu();
     app_indicator_set_menu(indicator, GTK_MENU(menu));
