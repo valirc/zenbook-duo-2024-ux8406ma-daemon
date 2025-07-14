@@ -8,6 +8,7 @@
 #include "monitor_bluetooth.h"
 #include "monitor_orientacion.h"
 #include "monitor_teclado_usb.h"
+#include "audio.h"
 
 static AppIndicator *indicator;
 static pthread_t hilo_orientacion;
@@ -51,6 +52,7 @@ static GtkWidget* create_menu()
     GtkWidget *menu, *item;
     menu = gtk_menu_new();
 
+    configurar_dmic_raw();
     on_start_orientacion();
     on_start_bluetooth();
     on_start_usb();

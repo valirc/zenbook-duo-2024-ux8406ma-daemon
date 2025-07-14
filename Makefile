@@ -14,6 +14,7 @@ app-obj:
 	$(CC) $(INCLUDE) -o obj/comun.o -c src/comun.c
 	$(CC) $(INCLUDE) -o obj/teclado.o -c src/teclado.c
 	$(CC) $(INCLUDE) -o obj/pantalla.o -c src/pantalla.c
+	$(CC) $(INCLUDE) -o obj/audio.o -c src/audio.c
 	$(CC) $(INCLUDE) -o obj/monitor_bluetooth.o -c src/monitor_bluetooth.c
 	$(CC) $(INCLUDE) -o obj/monitor_orientacion.o -c src/monitor_orientacion.c
 	$(CC) $(INCLUDE) -o obj/monitor_teclado_usb.o -c src/monitor_teclado_usb.c
@@ -22,8 +23,8 @@ app-obj:
 	$(CC) $(INCLUDE) -o obj/gui_daemon.o -c src/gui_daemon.c
 
 app-bin:
-	$(CC) $(INCLUDE) -o bin/zbd obj/comun.o obj/teclado.o obj/pantalla.o obj/monitor_bluetooth.o obj/monitor_orientacion.o obj/monitor_teclado_usb.o obj/config.o obj/main.o ${GTK_LIB}
-	$(CC) $(INCLUDE) -o bin/zbd-tray obj/comun.o obj/teclado.o obj/pantalla.o obj/monitor_bluetooth.o obj/monitor_orientacion.o obj/monitor_teclado_usb.o obj/config.o obj/gui_daemon.o ${GTK_LIB}
+	$(CC) $(INCLUDE) -o bin/zbd obj/comun.o obj/teclado.o obj/pantalla.o obj/monitor_bluetooth.o obj/monitor_orientacion.o obj/monitor_teclado_usb.o obj/audio.o obj/config.o obj/main.o ${GTK_LIB}
+	$(CC) $(INCLUDE) -o bin/zbd-tray obj/comun.o obj/teclado.o obj/pantalla.o obj/monitor_bluetooth.o obj/monitor_orientacion.o obj/monitor_teclado_usb.o obj/audio.o obj/config.o obj/gui_daemon.o ${GTK_LIB}
 
 instalar:
 	mkdir -p /etc/zbd/

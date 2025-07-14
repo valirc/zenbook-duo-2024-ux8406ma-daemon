@@ -20,7 +20,7 @@
  */
 void print_usage(const char *progname)
 {
-    fprintf(stderr, "Uso: %s <limitar-carga-bateria <n>|set-brillo-pantalla <n>|set-brillo-teclado <n>|monitorizar-rotacion|monitorizar-bluetooth>\n", progname);
+    fprintf(stderr, "Uso: %s <limitar-carga-bateria <n>|set-brillo-pantalla <n>|set-brillo-teclado <n>|activar-dmic-raw|monitorizar-rotacion|monitorizar-bluetooth>\n", progname);
 }
 
 int main(int argc, char *argv[])
@@ -58,6 +58,10 @@ int main(int argc, char *argv[])
             return EXIT_FAILURE;
         }
         set_pantalla_brillo(atoi(argv[2]));
+    }
+    else if (strcmp(command, "activar-dmic-raw") == 0)
+    {
+        return configurar_dmic_raw();
     }
     else if (strcmp(command, "set-brillo-teclado") == 0)
     {
