@@ -75,9 +75,7 @@ int main(int argc, char *argv[])
     else if (strcmp(command, "daemon") == 0)
     {
         printf("Iniciando daemon...\n");
-        pthread_t hilo_orientacion, hilo_modo_deteccion;
-
-        pthread_join(hilo_orientacion, NULL);
+        pthread_t hilo_orientacion = 0, hilo_modo_deteccion = 0;
 
         if (pthread_create(&hilo_orientacion, NULL, monitorizar_cambios_orientacion, NULL) != 0)
         {
@@ -92,19 +90,25 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "Error al crear hilo de bluetooth\n");
                 return 1;
             }
-
-            pthread_join(hilo_modo_deteccion, NULL);
         }
         else if (!strcmp(cfg->modo_deteccion, "udev"))
         {
             if (pthread_create(&hilo_modo_deteccion, NULL, monitorizar_cambios_teclado_usb, NULL) != 0)
             {
-                fprintf(stderr, "Error al crear hilo de bluetooth\n");
+                fprintf(stderr, "Error al crear hilo udev\n");
                 return 1;
             }
-
-            pthread_join(hilo_modo_deteccion, NULL);
         }
+        else
+        {
+            fprintf(stderr, "modo_deteccion invalido: '%s' (se espera 'udev' o 'bluetooth')\n",
+                    cfg->modo_deteccion ? cfg->modo_deteccion : "(null)");
+            return 1;
+        }
+
+        /* Bloquear hasta que ambos hilos terminen (normalmente solo via senal). */
+        pthread_join(hilo_orientacion, NULL);
+        pthread_join(hilo_modo_deteccion, NULL);
     }
     else
     {
