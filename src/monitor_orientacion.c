@@ -27,6 +27,9 @@ static void on_property_changed(
     GVariant *changed_properties,
     GStrv invalidated_properties,
     gpointer user_data) {
+    (void)proxy;
+    (void)invalidated_properties;
+    (void)user_data;
     GVariantIter iter;
     const gchar *key;
     GVariant *value;
@@ -43,6 +46,7 @@ static void on_property_changed(
 }
 
 void *monitorizar_cambios_orientacion(void *arg) {
+    (void)arg;
     GError *error = NULL;
     GDBusProxy *proxy = NULL;
 

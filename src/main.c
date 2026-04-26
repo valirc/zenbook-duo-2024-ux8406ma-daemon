@@ -18,9 +18,9 @@
 #include "runtime.h"
 
 /*
- * Función para imprimir la forma de uso (similar al '*)' del script bash.
+ * Imprime la forma de uso del binario.
  */
-void print_usage(const char *progname)
+static void print_usage(const char *progname)
 {
     fprintf(stderr, "Uso: %s <limitar-carga-bateria <n>|set-brillo-pantalla <n>|set-brillo-teclado <n>|activar-dmic-raw|monitorizar-rotacion|monitorizar-bluetooth>\n", progname);
 }

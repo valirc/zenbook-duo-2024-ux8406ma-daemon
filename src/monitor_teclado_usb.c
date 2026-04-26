@@ -13,7 +13,7 @@
 #include "monitor_teclado_usb.h"
 #include "runtime.h"
 
-int inicializar_estado(struct udev *udev, const char *usb_path) {
+static int inicializar_estado(struct udev *udev, const char *usb_path) {
     struct udev_device *dev = udev_device_new_from_syspath(udev, usb_path);
 
     if (dev) {
@@ -33,6 +33,7 @@ int inicializar_estado(struct udev *udev, const char *usb_path) {
 
 void *monitorizar_cambios_teclado_usb(void *arg)
 {
+    (void)arg;
     struct udev *udev = udev_new();
     if (!udev)
     {

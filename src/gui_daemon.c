@@ -18,37 +18,41 @@ static pthread_t hilo_usb;
 
 static void on_set_pantalla_brillo(GtkMenuItem *item, gpointer user_data)
 {
+    (void)item;
     int nivel = GPOINTER_TO_INT(user_data);
     set_pantalla_brillo(nivel);
 }
 
 static void on_set_teclado_brillo(GtkMenuItem *item, gpointer user_data)
 {
+    (void)item;
     int nivel = GPOINTER_TO_INT(user_data);
     set_brillo_teclado(nivel);
 }
 
-static void on_start_orientacion()
+static void on_start_orientacion(void)
 {
     pthread_create(&hilo_orientacion, NULL, monitorizar_cambios_orientacion, NULL);
 }
 
-static void on_start_bluetooth()
+static void on_start_bluetooth(void)
 {
     pthread_create(&hilo_bluetooth, NULL, monitorizar_cambios_bluetooth, NULL);
 }
 
-static void on_start_usb()
+static void on_start_usb(void)
 {
     pthread_create(&hilo_usb, NULL, monitorizar_cambios_teclado_usb, NULL);
 }
 
 static void on_quit(GtkMenuItem *item, gpointer user_data)
 {
+    (void)item;
+    (void)user_data;
     gtk_main_quit();
 }
 
-static GtkWidget* create_menu()
+static GtkWidget *create_menu(void)
 {
     GtkWidget *menu, *item;
     menu = gtk_menu_new();
