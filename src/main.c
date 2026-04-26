@@ -60,8 +60,10 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    printf("Configuracion cargada (backend display: %s).\n",
-           display_active_backend());
+    /* Diagnostico al journal/stderr; stdout queda limpio para que un
+     * pipeline (shell, scripts) no ingiera estos mensajes. */
+    fprintf(stderr, "Configuracion cargada (backend display: %s).\n",
+            display_active_backend());
 
     const char *command = argv[1];
 
@@ -82,7 +84,7 @@ int main(int argc, char *argv[])
             fprintf(stderr, "Falta el nivel para set-brillo-pantalla.\n");
             return EXIT_FAILURE;
         }
-        set_pantalla_brillo(atoi(argv[2]));
+        return set_pantalla_brillo(atoi(argv[2]));
     }
     else if (strcmp(command, "activar-dmic-raw") == 0)
     {
