@@ -11,24 +11,43 @@
 #include "audio.h"
 #include "runtime.h"
 #include "display.h"
+#include "ipc.h"
 
 static AppIndicator *indicator;
 static pthread_t hilo_orientacion;
 static pthread_t hilo_bluetooth;
 static pthread_t hilo_usb;
+/* Cached at startup: 1 = the system service is running and we
+ * should route privileged calls through D-Bus; 0 = no service, fall
+ * back to direct calls (only useful when running zbd-tray as root). */
+static int system_service_available = 0;
 
 static void on_set_pantalla_brillo(GtkMenuItem *item, gpointer user_data)
 {
     (void)item;
     int nivel = GPOINTER_TO_INT(user_data);
-    set_pantalla_brillo(nivel);
+    if (system_service_available)
+    {
+        zbd_ipc_client_set_screen_brightness(nivel);
+    }
+    else
+    {
+        set_pantalla_brillo(nivel);
+    }
 }
 
 static void on_set_teclado_brillo(GtkMenuItem *item, gpointer user_data)
 {
     (void)item;
     int nivel = GPOINTER_TO_INT(user_data);
-    set_brillo_teclado(nivel);
+    if (system_service_available)
+    {
+        zbd_ipc_client_set_keyboard_backlight(nivel);
+    }
+    else
+    {
+        set_brillo_teclado(nivel);
+    }
 }
 
 static void on_start_orientacion(void)
@@ -58,7 +77,14 @@ static GtkWidget *create_menu(void)
     GtkWidget *menu, *item;
     menu = gtk_menu_new();
 
-    configurar_dmic_raw();
+    if (system_service_available)
+    {
+        zbd_ipc_client_configure_dmic();
+    }
+    else
+    {
+        configurar_dmic_raw();
+    }
     on_start_orientacion();
 
     /* Solo un monitor del teclado a la vez: Bluetooth o USB, segun la
@@ -136,6 +162,14 @@ int main(int argc, char **argv)
         fprintf(stderr, "display: ningun backend disponible; abortando.\n");
         return 1;
     }
+
+    /* Detectar si el servicio system D-Bus esta corriendo. Si lo esta,
+     * la tray rutea las operaciones privilegiadas a traves de D-Bus.
+     * Si no, ejecuta directamente (solo util cuando zbd-tray se lanza
+     * como root para depuracion). */
+    system_service_available = zbd_ipc_client_is_service_available();
+    fprintf(stderr, "ipc: zbd-system %s en el bus\n",
+            system_service_available ? "presente" : "ausente; usando llamadas directas");
 
     const gchar *icon_path = "/usr/share/icons/zbd/zbd-tray.svg";
 

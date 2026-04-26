@@ -1,41 +1,31 @@
-# zbd-system.service — apply hardware-level settings at boot.
+# zbd-system.service — long-running D-Bus service.
 #
-# This is a one-shot system service that runs at boot to:
-#   - cap the battery charge at the configured threshold
-#     (writes /sys/class/power_supply/BAT0/charge_control_end_threshold),
-#   - apply the configured screen and keyboard backlight defaults,
-#   - load the DMIC raw PulseAudio source.
+# zbd-system runs as the privileged half of zbd. It owns the
+# org.anexa.zbd1 bus name on the system bus and exposes the
+# org.anexa.zbd1.System interface (see dbus/org.anexa.zbd.conf and
+# polkit/org.anexa.zbd.policy). The user-session service zbd-tray
+# routes its privileged operations (set screen/keyboard backlight,
+# battery threshold, configure DMIC) through that interface so the
+# user-facing GUI never has to hold root privileges.
 #
-# Until the full system/tray split with D-Bus + polkit lands, the
-# user-session zbd-tray.service handles the runtime monitors
-# (Bluetooth, USB, accelerometer). That service does not need root.
-#
-# This unit deliberately uses Type=oneshot + RemainAfterExit=yes so
-# it sticks around as "active (exited)" and a `systemctl restart
-# zbd-system` re-applies the settings without leaving zombie
-# processes.
+# As soon as zbd-system starts it applies the persistent defaults
+# from /etc/zbd/zbd.conf (battery threshold, brightness, keyboard
+# backlight) so the same unit replaces the previous oneshot. Then it
+# enters the sd-bus event loop and stays there until SIGTERM.
 
 [Unit]
-Description=zbd-system: Zenbook Duo hardware tunables (brightness, battery, DMIC)
+Description=zbd-system: Zenbook Duo privileged D-Bus service
 Documentation=https://github.com/valirc/zenbook-duo-2024-ux8406ma-daemon
-After=multi-user.target sound.target
+After=multi-user.target sound.target dbus.service
 Wants=sound.target
+Requires=dbus.service
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
-
-# Apply defaults from /etc/zbd/zbd.conf. The binary already validates
-# every value before touching /sys, so a malformed config aborts
-# cleanly with a journal entry instead of half-applying.
-ExecStart=/usr/local/sbin/zbd-system limitar-carga-bateria 80
-ExecStart=/usr/local/sbin/zbd-system set-brillo-pantalla   30
-ExecStart=/usr/local/sbin/zbd-system set-brillo-teclado    1
-# Reaplicar los mismos valores en restart para que `systemctl restart
-# zbd-system` sea efectivo.
-ExecReload=/usr/local/sbin/zbd-system limitar-carga-bateria 80
-ExecReload=/usr/local/sbin/zbd-system set-brillo-pantalla   30
-ExecReload=/usr/local/sbin/zbd-system set-brillo-teclado    1
+Type=dbus
+BusName=org.anexa.zbd1
+ExecStart=/usr/local/sbin/zbd-system service
+Restart=on-failure
+RestartSec=3s
 
 # === Hardening =============================================================
 # zbd-system writes a tiny set of paths and runs a tiny set of
@@ -71,7 +61,7 @@ RestrictNamespaces=yes
 LockPersonality=yes
 NoNewPrivileges=yes
 
-# Network: zbd-system never reaches out.
+# Network: solo D-Bus (UNIX domain socket).
 PrivateNetwork=yes
 IPAddressDeny=any
 RestrictAddressFamilies=AF_UNIX

@@ -17,13 +17,28 @@
 #include "config.h"
 #include "runtime.h"
 #include "display.h"
+#include "ipc.h"
 
 /*
  * Imprime la forma de uso del binario.
  */
 static void print_usage(const char *progname)
 {
-    fprintf(stderr, "Uso: %s <limitar-carga-bateria <n>|set-brillo-pantalla <n>|set-brillo-teclado <n>|activar-dmic-raw|monitorizar-rotacion|monitorizar-bluetooth>\n", progname);
+    fprintf(stderr,
+            "Uso: %s <comando> [args]\n"
+            "\n"
+            "Comandos privilegiados (requieren root o ser invocados via D-Bus):\n"
+            "  limitar-carga-bateria <20..100>  Limitar el porcentaje maximo de carga\n"
+            "  set-brillo-pantalla <10..100>    Brillo del backlight Intel\n"
+            "  set-brillo-teclado  <0..3>       Brillo del teclado retroiluminado\n"
+            "  activar-dmic-raw                 Cargar source PulseAudio del DMIC\n"
+            "\n"
+            "Modos de servicio:\n"
+            "  service                          Arrancar como servicio D-Bus en\n"
+            "                                   org.anexa.zbd1 (escucha hasta SIGTERM)\n"
+            "  daemon                           Modo legacy: ejecuta los hilos de\n"
+            "                                   monitorizacion (BT/USB/orientacion)\n",
+            progname);
 }
 
 int main(int argc, char *argv[])
@@ -81,6 +96,30 @@ int main(int argc, char *argv[])
             return EXIT_FAILURE;
         }
         return set_brillo_teclado(atoi(argv[2]));
+    }
+    else if (strcmp(command, "service") == 0)
+    {
+        printf("Arrancando servicio D-Bus en %s ...\n", ZBD_DBUS_BUS_NAME);
+        if (zbd_install_signal_handlers() != 0)
+        {
+            return EXIT_FAILURE;
+        }
+        /* Aplicar los defaults persistentes del config antes de
+         * entrar al event loop, para que un boot/restart deje el
+         * sistema en el estado deseado sin necesidad de un servicio
+         * oneshot adicional. */
+        printf("Aplicando defaults: brillo=%d, teclado=%d, bateria=%d\n",
+               cfg->pantalla_nivel_brillo,
+               cfg->teclado_nivel_brillo,
+               cfg->bateria_carga_maxima);
+        set_pantalla_brillo(cfg->pantalla_nivel_brillo);
+        set_brillo_teclado(cfg->teclado_nivel_brillo);
+        if (cfg->bateria_carga_maxima > 0)
+        {
+            limitar_carga_bateria(cfg->bateria_carga_maxima);
+        }
+
+        return zbd_ipc_server_run() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
     else if (strcmp(command, "daemon") == 0)
     {

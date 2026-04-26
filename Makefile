@@ -66,7 +66,7 @@ WARNINGS     := -Wall -Wextra -Wformat=2 -Wformat-security \
                 -Wmissing-prototypes -Wcast-align -Wnull-dereference \
                 -Wno-deprecated-declarations
 PKG_DEPS     := gtk+-3.0 ayatana-appindicator3-0.1 libusb-1.0 \
-                glib-2.0 gio-2.0 libudev
+                glib-2.0 gio-2.0 libudev libsystemd
 PKG_CFLAGS   := $(shell $(PKG_CONFIG) --cflags $(PKG_DEPS))
 PKG_LIBS     := $(shell $(PKG_CONFIG) --libs   $(PKG_DEPS))
 
@@ -87,6 +87,8 @@ COMMON_SRCS  := $(SRC_DIR)/runtime.c $(SRC_DIR)/exec.c $(SRC_DIR)/config.c \
                 $(SRC_DIR)/display.c \
                 $(SRC_DIR)/display_xrandr.c \
                 $(SRC_DIR)/display_gdctl.c \
+                $(SRC_DIR)/ipc_client.c \
+                $(SRC_DIR)/ipc_server.c \
                 $(SRC_DIR)/monitor_bluetooth.c \
                 $(SRC_DIR)/monitor_orientacion.c \
                 $(SRC_DIR)/monitor_teclado_usb.c
