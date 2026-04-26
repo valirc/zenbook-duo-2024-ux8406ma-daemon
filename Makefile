@@ -84,6 +84,9 @@ BIN_DIR_BLD  := bin
 # Common (linked into both binaries)
 COMMON_SRCS  := $(SRC_DIR)/runtime.c $(SRC_DIR)/exec.c $(SRC_DIR)/config.c \
                 $(SRC_DIR)/teclado.c $(SRC_DIR)/pantalla.c $(SRC_DIR)/audio.c \
+                $(SRC_DIR)/display.c \
+                $(SRC_DIR)/display_xrandr.c \
+                $(SRC_DIR)/display_gdctl.c \
                 $(SRC_DIR)/monitor_bluetooth.c \
                 $(SRC_DIR)/monitor_orientacion.c \
                 $(SRC_DIR)/monitor_teclado_usb.c

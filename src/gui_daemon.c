@@ -10,6 +10,7 @@
 #include "monitor_teclado_usb.h"
 #include "audio.h"
 #include "runtime.h"
+#include "display.h"
 
 static AppIndicator *indicator;
 static pthread_t hilo_orientacion;
@@ -131,7 +132,12 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    const gchar *icon_path = "/usr/share/icons/gmam/icono.svg";
+    if (display_init() < 0) {
+        fprintf(stderr, "display: ningun backend disponible; abortando.\n");
+        return 1;
+    }
+
+    const gchar *icon_path = "/usr/share/icons/zbd/zbd-tray.svg";
 
     indicator = app_indicator_new("zbd-indicator", icon_path, APP_INDICATOR_CATEGORY_APPLICATION_STATUS);
     app_indicator_set_status(indicator, APP_INDICATOR_STATUS_ACTIVE);

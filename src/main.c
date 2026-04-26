@@ -16,6 +16,7 @@
 #include "monitor_teclado_usb.h"
 #include "config.h"
 #include "runtime.h"
+#include "display.h"
 
 /*
  * Imprime la forma de uso del binario.
@@ -38,7 +39,14 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE; // Salir si no se puede cargar la configuración
     }
 
-    printf("Configuración cargada exitosamente.\n");
+    if (display_init() < 0)
+    {
+        fprintf(stderr, "display: ningun backend disponible; abortando.\n");
+        return EXIT_FAILURE;
+    }
+
+    printf("Configuracion cargada (backend display: %s).\n",
+           display_active_backend());
 
     const char *command = argv[1];
 

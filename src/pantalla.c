@@ -1,19 +1,24 @@
 /*
- * pantalla.c — display, brightness and wallpaper helpers (xrandr backend).
+ * pantalla.c — hardware brightness + thin wrappers around the
+ * pluggable display backend.
  *
- * This file is the xrandr-only implementation of the screen-management
- * primitives used by the daemon. A future commit will introduce a
- * pluggable display backend (xrandr, gdctl, mutter D-Bus); for the
- * moment the API is unchanged but the implementation no longer goes
- * through /bin/sh.
+ * Historically pantalla.c held the xrandr-only logic for turning
+ * eDP-2 on/off and setting wallpapers. That logic has now moved to
+ * the display.c dispatcher and the per-compositor backends
+ * (display_xrandr.c, display_gdctl.c). The functions exported here
+ * keep the same names and signatures so the rest of the daemon
+ * (monitor_*.c) does not have to be touched in this refactor; they
+ * just delegate to the active display backend.
  *
- * - set_pantalla_brillo() writes directly to the backlight sysfs file
- *   instead of `echo X > /sys/...`, because the redirection required a
- *   shell.
- * - configurar_monitores() and the wallpaper helpers build explicit
- *   argv vectors and exec_cmd_argv into xrandr / feh, so values like
- *   the resolution and refresh rate from /etc/zbd/zbd.conf are passed
- *   as opaque arguments and cannot be re-parsed by a shell.
+ * What still lives in this file:
+ *   - set_pantalla_brillo(): writes /sys/class/backlight/intel_backlight
+ *     directly. Brightness is a hardware-level operation that has no
+ *     business going through a compositor backend.
+ *
+ * What has been delegated:
+ *   - configurar_monitores("encender"|"apagar")  → display_set_output()
+ *   - monitor_estado()                            → display_is_output_on()
+ *   - poner_fondo_*                               → display_set_wallpapers()
  */
 
 #include <stdio.h>
@@ -26,7 +31,7 @@
 #include "comun.h"
 #include "pantalla.h"
 #include "teclado.h"
-#include "exec.h"
+#include "display.h"
 
 #define BACKLIGHT_PATH "/sys/class/backlight/intel_backlight/brightness"
 
@@ -73,9 +78,6 @@ int set_pantalla_brillo(int nivel_brillo)
     return EXIT_SUCCESS;
 }
 
-/* ===================================================
- * configurar_monitores: "encender" o "apagar" eDP-2
- * =================================================== */
 void configurar_monitores(const char *accion)
 {
     if (!accion)
@@ -86,44 +88,25 @@ void configurar_monitores(const char *accion)
 
     if (strcmp(accion, "encender") == 0)
     {
-        printf("Activando eDP-2...\n");
-        char *const args_auto[] = { "xrandr", "--output", "eDP-2", "--auto", NULL };
-        if (exec_cmd_argv("xrandr", args_auto) != 0)
+        printf("Activando eDP-2 via backend %s...\n",
+               display_active_backend() ? display_active_backend() : "(none)");
+        if (display_set_output("eDP-2", DISPLAY_OUTPUT_ON,
+                               cfg->pantalla_resolucion,
+                               cfg->pantalla_tasa_refresco) != 0)
         {
-            fprintf(stderr, "configurar_monitores(encender): xrandr --auto fallo\n");
+            fprintf(stderr, "configurar_monitores(encender): backend fallo\n");
             return;
         }
-
-        printf("Configurando la posicion y resolucion de las pantallas...\n");
-        char *const args_pos[] = {
-            "xrandr",
-            "--output", "eDP-1", "--mode", cfg->pantalla_resolucion,
-                "--rate",  cfg->pantalla_tasa_refresco, "--primary",
-            "--output", "eDP-2", "--mode", cfg->pantalla_resolucion,
-                "--rate",  cfg->pantalla_tasa_refresco, "--below", "eDP-1",
-            NULL
-        };
-        exec_cmd_argv("xrandr", args_pos);
     }
     else if (strcmp(accion, "apagar") == 0)
     {
-        printf("Apagando eDP-2...\n");
-        char *const args_off[] = { "xrandr", "--output", "eDP-2", "--off", NULL };
-        if (exec_cmd_argv("xrandr", args_off) != 0)
+        printf("Apagando eDP-2 via backend %s...\n",
+               display_active_backend() ? display_active_backend() : "(none)");
+        if (display_set_output("eDP-2", DISPLAY_OUTPUT_OFF, NULL, NULL) != 0)
         {
-            fprintf(stderr, "configurar_monitores(apagar): xrandr --off fallo\n");
+            fprintf(stderr, "configurar_monitores(apagar): backend fallo\n");
             return;
         }
-
-        printf("Configurando eDP-1 con resolucion %s a %s Hz...\n",
-               cfg->pantalla_resolucion, cfg->pantalla_tasa_refresco);
-        char *const args_mode[] = {
-            "xrandr",
-            "--output", "eDP-1", "--mode", cfg->pantalla_resolucion,
-                "--rate",  cfg->pantalla_tasa_refresco,
-            NULL
-        };
-        exec_cmd_argv("xrandr", args_mode);
     }
     else
     {
@@ -131,6 +114,8 @@ void configurar_monitores(const char *accion)
         return;
     }
 
+    /* Restaurar brillo y backlight del teclado tras cualquier
+     * reconfiguracion (algunos compositores los resetean). */
     set_pantalla_brillo(cfg->pantalla_nivel_brillo);
     set_brillo_teclado(cfg->teclado_nivel_brillo);
 }
@@ -142,47 +127,17 @@ int monitor_estado(const char *monitor_id)
         fprintf(stderr, "El identificador del monitor es invalido.\n");
         return 0;
     }
-
-    char monitor_path[512];
-    snprintf(monitor_path, sizeof(monitor_path),
-             "/sys/class/drm/card1-%s/enabled", monitor_id);
-
-    FILE *enabled_file = fopen(monitor_path, "r");
-    if (!enabled_file)
-    {
-        fprintf(stderr, "El monitor %s no existe o no se puede acceder a %s: %s\n",
-                monitor_id, monitor_path, strerror(errno));
-        return 0;
-    }
-
-    char status[16];
-    int result = 0;
-    if (fgets(status, sizeof(status), enabled_file))
-    {
-        result = !strcmp(status, "enabled\n");
-    }
-    fclose(enabled_file);
-    return result;
+    return display_is_output_on(monitor_id);
 }
 
-/* ===================================================
- * Cuando eDP-2 se enciende, se usan 2 fondos con feh,
- * cuando se apaga, solo uno.
- * =================================================== */
 void poner_fondo_2_monitores(void)
 {
-    char *const args[] = {
-        "feh", "--bg-scale", cfg->pantalla_fondo_edp1,
-               "--bg-scale", cfg->pantalla_fondo_edp2,
-        NULL
-    };
-    exec_cmd_argv("feh", args);
+    if (!cfg) return;
+    display_set_wallpapers(cfg->pantalla_fondo_edp1, cfg->pantalla_fondo_edp2);
 }
 
 void poner_fondo_1_monitor(void)
 {
-    char *const args[] = {
-        "feh", "--bg-scale", cfg->pantalla_fondo_edp1, NULL
-    };
-    exec_cmd_argv("feh", args);
+    if (!cfg) return;
+    display_set_wallpapers(cfg->pantalla_fondo_edp1, NULL);
 }
