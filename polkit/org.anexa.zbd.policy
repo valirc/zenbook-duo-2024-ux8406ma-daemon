@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Polkit actions for zbd-system. Each action governs one privileged
+  operation exposed by the org.anexa.zbd1.System D-Bus interface.
+
+  Defaults:
+    - allow_any:      no   (no remote callers ever)
+    - allow_inactive: no   (no calls from background/locked sessions)
+    - allow_active:   yes  (interactive console user can call without
+                            a password — that is the user marcos in
+                            front of the laptop, which is the only
+                            scenario zbd-tray runs in).
+
+  An admin can override these in /etc/polkit-1/rules.d/. The shipped
+  defaults are deliberately permissive for the desktop use case
+  while still rejecting daemons / cron / SSH-without-tty (which lack
+  an "active" session).
+-->
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
+<policyconfig>
+
+  <vendor>zbd — Zenbook Duo Daemon</vendor>
+  <vendor_url>https://github.com/valirc/zenbook-duo-2024-ux8406ma-daemon</vendor_url>
+  <icon_name>video-display</icon_name>
+
+  <action id="org.anexa.zbd1.set-screen-brightness">
+    <description>Set the internal screen backlight level</description>
+    <message>Authentication is required to change the screen brightness.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+
+  <action id="org.anexa.zbd1.set-keyboard-backlight">
+    <description>Set the keyboard backlight level (vendor HID protocol)</description>
+    <message>Authentication is required to change the keyboard backlight.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+
+  <action id="org.anexa.zbd1.set-battery-threshold">
+    <description>Set the battery charge end threshold</description>
+    <message>Authentication is required to change the battery charge limit.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+
+  <action id="org.anexa.zbd1.configure-dmic">
+    <description>Load the Intel DMIC raw audio source</description>
+    <message>Authentication is required to reconfigure the microphone source.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+
+</policyconfig>
