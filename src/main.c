@@ -136,6 +136,20 @@ int main(int argc, char *argv[])
             limitar_carga_bateria(cfg->bateria_carga_maxima);
         }
 
+        /* DMIC: best-effort. El servicio puede arrancar antes de que
+         * PulseAudio/PipeWire este disponible (zbd-system.service no
+         * ordena After=user@0.service para no bloquear el boot). Si
+         * pactl no responde, configurar_dmic_raw() ya logea un
+         * warning claro y retorna EXIT_FAILURE; nosotros lo tratamos
+         * como advertencia y seguimos al event loop, donde el tray
+         * o un cliente D-Bus podran pedir ConfigureDmic mas tarde. */
+        if (configurar_dmic_raw() != EXIT_SUCCESS)
+        {
+            fprintf(stderr,
+                    "service: DMIC no se ha podido configurar al boot; "
+                    "el cliente puede invocar ConfigureDmic mas tarde via D-Bus.\n");
+        }
+
         return zbd_ipc_server_run() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
     else if (strcmp(command, "daemon") == 0)

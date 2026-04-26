@@ -1,0 +1,29 @@
+### zbd: Intel SST DMIC raw source
+###
+### Loaded automatically every time PulseAudio (or PipeWire's
+### pulse-server compatibility layer) starts for any user. Both
+### implementations source /etc/pulse/default.pa.d/*.pa as part of
+### the standard initialisation, so this single file is enough to
+### make `dmic_raw` available immediately at session login —
+### independently of zbd-system, zbd-tray or any user code.
+###
+### Installed by `make install` to:
+###   /etc/pulse/default.pa.d/zbd-dmic.pa
+###
+### To reapply manually after editing:
+###   systemctl --user restart pipewire-pulse.service
+###   # or, while the daemon is running:
+###   busctl call org.anexa.zbd1 /org/anexa/zbd1/System \
+###          org.anexa.zbd1.System ConfigureDmic
+###
+### To verify the source is live:
+###   pactl list short sources | grep dmic_raw
+###   pactl get-default-source
+
+.fail
+load-module module-alsa-source device="hw:0,6" source_name=dmic_raw channels=2 format=s16le
+.nofail
+
+set-default-source dmic_raw
+set-source-volume @DEFAULT_SOURCE@ 70%
+set-source-mute   @DEFAULT_SOURCE@ false

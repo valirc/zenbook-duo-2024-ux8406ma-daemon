@@ -19,11 +19,15 @@
  *     SetScreenBrightness(i level) -> ()    level in [10..100]
  *     SetKeyboardBacklight(i level) -> ()   level in [0..3]
  *     SetBatteryThreshold(i level) -> ()    level in [20..100]
+ *     ConfigureDmic()              -> ()
  *
- * The DMIC source configuration is intentionally NOT exposed here:
- * it talks to PulseAudio / PipeWire, which run per user. zbd-tray
- * (user session) calls configurar_dmic_raw() directly without
- * crossing into the privileged service.
+ * In this deployment both zbd-system (privileged service) and
+ * zbd-tray (graphical session) run as root, so pactl invocations
+ * issued from the privileged process reach the same PulseAudio /
+ * PipeWire instance the user interacts with. ConfigureDmic is
+ * therefore safe to expose here — it remains valuable to ship over
+ * D-Bus so the tray can ask the system service to reapply the DMIC
+ * configuration after a PA restart, log file rotation, etc.
  *
  * Bus policy (dbus/org.anexa.zbd.conf): only root may own the name,
  * only members of the `zbd` group can send to it. Polkit
@@ -47,6 +51,7 @@
 int zbd_ipc_client_set_screen_brightness(int level);
 int zbd_ipc_client_set_keyboard_backlight(int level);
 int zbd_ipc_client_set_battery_threshold(int level);
+int zbd_ipc_client_configure_dmic(void);
 
 /*
  * Convenience: returns 1 if the system bus has the zbd-system

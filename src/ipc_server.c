@@ -29,6 +29,7 @@
 #include <systemd/sd-bus.h>
 
 #include "ipc.h"
+#include "audio.h"
 #include "config.h"
 #include "pantalla.h"
 #include "teclado.h"
@@ -90,13 +91,17 @@ static int method_set_battery_threshold(sd_bus_message *m, void *userdata, sd_bu
     return sd_bus_reply_method_return(m, NULL);
 }
 
-/* ---- vtable ------------------------------------------------------ *
- *
- * ConfigureDmic deliberately does NOT live here: pactl talks to a
- * per-user PulseAudio/PipeWire instance, so calling it from the
- * privileged process always fails. zbd-tray invokes
- * configurar_dmic_raw() directly in its own user session.
- */
+static int method_configure_dmic(sd_bus_message *m, void *userdata, sd_bus_error *err)
+{
+    (void)userdata;
+    if (configurar_dmic_raw() != EXIT_SUCCESS)
+    {
+        return sd_bus_error_setf(err, SD_BUS_ERROR_FAILED,
+                                 "configurar_dmic_raw fallo "
+                                 "(probablemente PulseAudio/PipeWire no esta listo aun)");
+    }
+    return sd_bus_reply_method_return(m, NULL);
+}
 
 static const sd_bus_vtable system_vtable[] = {
     SD_BUS_VTABLE_START(0),
@@ -105,6 +110,8 @@ static const sd_bus_vtable system_vtable[] = {
     SD_BUS_METHOD("SetKeyboardBacklight",  "i", "", method_set_keyboard_backlight,
                   SD_BUS_VTABLE_UNPRIVILEGED),
     SD_BUS_METHOD("SetBatteryThreshold",   "i", "", method_set_battery_threshold,
+                  SD_BUS_VTABLE_UNPRIVILEGED),
+    SD_BUS_METHOD("ConfigureDmic",          "", "", method_configure_dmic,
                   SD_BUS_VTABLE_UNPRIVILEGED),
     SD_BUS_VTABLE_END
 };

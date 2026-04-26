@@ -50,6 +50,39 @@ static int call_method_with_int_arg(const char *method, int level)
     return rc < 0 ? -1 : 0;
 }
 
+static int call_method_no_args(const char *method)
+{
+    sd_bus *bus = NULL;
+    sd_bus_error error = SD_BUS_ERROR_NULL;
+    sd_bus_message *reply = NULL;
+    int rc;
+
+    rc = sd_bus_open_system(&bus);
+    if (rc < 0)
+    {
+        fprintf(stderr, "ipc: sd_bus_open_system fallo: %s\n", strerror(-rc));
+        return -1;
+    }
+
+    rc = sd_bus_call_method(bus,
+                            ZBD_DBUS_BUS_NAME,
+                            ZBD_DBUS_OBJECT_PATH,
+                            ZBD_DBUS_INTERFACE,
+                            method,
+                            &error, &reply, NULL);
+    if (rc < 0)
+    {
+        fprintf(stderr, "ipc: %s fallo: %s\n",
+                method,
+                error.message ? error.message : strerror(-rc));
+    }
+
+    sd_bus_error_free(&error);
+    sd_bus_message_unref(reply);
+    sd_bus_unref(bus);
+    return rc < 0 ? -1 : 0;
+}
+
 int zbd_ipc_client_set_screen_brightness(int level)
 {
     return call_method_with_int_arg("SetScreenBrightness", level);
@@ -63,6 +96,11 @@ int zbd_ipc_client_set_keyboard_backlight(int level)
 int zbd_ipc_client_set_battery_threshold(int level)
 {
     return call_method_with_int_arg("SetBatteryThreshold", level);
+}
+
+int zbd_ipc_client_configure_dmic(void)
+{
+    return call_method_no_args("ConfigureDmic");
 }
 
 int zbd_ipc_client_is_service_available(void)

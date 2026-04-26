@@ -49,6 +49,7 @@ SYSTEMD_SYS  ?= /usr/lib/systemd/system
 SYSTEMD_USER ?= $(PREFIX)/lib/systemd/user
 DBUS_SYSTEM_D?= /usr/share/dbus-1/system.d
 POLKIT_DIR   ?= /usr/share/polkit-1/actions
+PULSE_CONF_D ?= /etc/pulse/default.pa.d
 
 # ---- Build mode --------------------------------------------------------------
 ifeq ($(RELEASE),1)
@@ -165,6 +166,11 @@ install: release
 	    $(INSTALL) -d $(DESTDIR)$(DBUS_SYSTEM_D) ; \
 	    [ -f dbus/org.anexa.zbd.conf ] && $(INSTALL) -m 0644 dbus/org.anexa.zbd.conf $(DESTDIR)$(DBUS_SYSTEM_D)/ || true ; \
 	  fi
+	@if [ -f conf/zbd-dmic.pa ]; then \
+	    echo "  INSTALL  pulse drop-in (DMIC autoload)" ; \
+	    $(INSTALL) -d $(DESTDIR)$(PULSE_CONF_D) ; \
+	    $(INSTALL) -m 0644 conf/zbd-dmic.pa $(DESTDIR)$(PULSE_CONF_D)/zbd-dmic.pa ; \
+	  fi
 	@echo "  DONE     installed under $(DESTDIR)$(PREFIX)"
 
 uninstall:
@@ -177,6 +183,7 @@ uninstall:
 	rm -f  $(DESTDIR)$(SYSTEMD_USER)/zbd-tray.service
 	rm -f  $(DESTDIR)$(POLKIT_DIR)/org.anexa.zbd.policy
 	rm -f  $(DESTDIR)$(DBUS_SYSTEM_D)/org.anexa.zbd.conf
+	rm -f  $(DESTDIR)$(PULSE_CONF_D)/zbd-dmic.pa
 	@echo "  KEEP     $(DESTDIR)$(SYSCONF_DIR)/zbd (user data)"
 
 # ---- Quality -----------------------------------------------------------------

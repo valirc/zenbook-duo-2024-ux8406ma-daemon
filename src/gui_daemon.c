@@ -77,9 +77,17 @@ static GtkWidget *create_menu(void)
     GtkWidget *menu, *item;
     menu = gtk_menu_new();
 
-    /* DMIC configuration is local to the user's PulseAudio/PipeWire
-     * instance, so it never goes through the privileged service. */
-    configurar_dmic_raw();
+    /* DMIC: si el servicio root esta presente, lo enrutamos por D-Bus
+     * (el servicio se encarga de logear bien si PA aun no esta listo);
+     * si no, lo hacemos directos desde la sesion de la tray. */
+    if (system_service_available)
+    {
+        zbd_ipc_client_configure_dmic();
+    }
+    else
+    {
+        configurar_dmic_raw();
+    }
     on_start_orientacion();
 
     /* Solo un monitor del teclado a la vez: Bluetooth o USB, segun la

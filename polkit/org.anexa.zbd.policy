@@ -55,8 +55,14 @@
     </defaults>
   </action>
 
-  <!-- DMIC configuration runs in the user session (zbd-tray), not in
-       the privileged service, because pactl reaches the user's
-       PulseAudio/PipeWire instance. No polkit action is needed. -->
+  <action id="org.anexa.zbd1.configure-dmic">
+    <description>Load the Intel DMIC raw audio source</description>
+    <message>Authentication is required to reconfigure the microphone source.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
 
 </policyconfig>
