@@ -1,9 +1,22 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <signal.h>
 #include <glib-2.0/gio/gio.h>
+#include <glib-2.0/glib-unix.h>
 
 #include "comun.h"
 #include "monitor_orientacion.h"
+#include "runtime.h"
+
+/* Callback para SIGTERM/SIGINT registrado via g_unix_signal_add: hace
+ * salir el GMainLoop limpiamente para que el hilo pueda hacer cleanup. */
+static gboolean on_shutdown_signal_glib(gpointer user_data)
+{
+    GMainLoop *loop = (GMainLoop *)user_data;
+    zbd_shutdown_requested = 1;
+    if (loop) g_main_loop_quit(loop);
+    return G_SOURCE_REMOVE;
+}
 
 // Variable global para almacenar la orientación actual
 char current_orientation[32] = "Unknown";
@@ -47,7 +60,7 @@ void *monitorizar_cambios_orientacion(void *arg) {
     if (!proxy) {
         fprintf(stderr, "Error creating proxy: %s\n", error->message);
         g_error_free(error);
-        return EXIT_FAILURE;
+        return NULL;
     }
 
     // Verificar si el sensor está habilitado
@@ -55,7 +68,7 @@ void *monitorizar_cambios_orientacion(void *arg) {
     if (!enabled || !g_variant_get_boolean(enabled)) {
         fprintf(stderr, "Accelerometer not available.\n");
         g_clear_object(&proxy);
-        return EXIT_FAILURE;
+        return NULL;
     }
     g_variant_unref(enabled);
 
@@ -77,7 +90,7 @@ void *monitorizar_cambios_orientacion(void *arg) {
         fprintf(stderr, "Error enabling accelerometer: %s\n", error->message);
         g_error_free(error);
         g_clear_object(&proxy);
-        return EXIT_FAILURE;
+        return NULL;
     }
 
     // Conectar al evento de cambios de propiedad
@@ -85,13 +98,18 @@ void *monitorizar_cambios_orientacion(void *arg) {
 
     printf("Listening for accelerometer orientation changes...\n");
 
-    // Main loop para mantener el programa corriendo
+    // Main loop para mantener el hilo corriendo. Se registran fuentes
+    // de SIGTERM/SIGINT para que un Ctrl-C o un systemctl stop saquen
+    // del loop limpiamente.
     GMainLoop *loop = g_main_loop_new(NULL, FALSE);
+    g_unix_signal_add(SIGTERM, on_shutdown_signal_glib, loop);
+    g_unix_signal_add(SIGINT,  on_shutdown_signal_glib, loop);
+    g_unix_signal_add(SIGHUP,  on_shutdown_signal_glib, loop);
     g_main_loop_run(loop);
 
     // Cleanup
     g_main_loop_unref(loop);
     g_clear_object(&proxy);
 
-    return EXIT_SUCCESS;
+    return NULL;
 }

@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -5,11 +6,12 @@
 #include <libudev.h>
 #include <sys/time.h>
 #include <sys/types.h>
-#include <sys/select.h> 
+#include <sys/select.h>
 
 #include "comun.h"
 #include "pantalla.h"
 #include "monitor_teclado_usb.h"
+#include "runtime.h"
 
 int inicializar_estado(struct udev *udev, const char *usb_path) {
     struct udev_device *dev = udev_device_new_from_syspath(udev, usb_path);
@@ -68,14 +70,25 @@ void *monitorizar_cambios_teclado_usb(void *arg)
 
     printf("Listening for USB events on port 3-6...\n");
 
-    while (1)
+    while (!zbd_shutdown_requested)
     {
         fd_set fds;
         FD_ZERO(&fds);
         FD_SET(fd, &fds);
 
-        int ret = select(fd + 1, &fds, NULL, NULL, NULL);
-        if (ret > 0 && FD_ISSET(fd, &fds))
+        /* Timeout de 1 s para reentrar en el bucle y volver a comprobar
+         * zbd_shutdown_requested si llega una senal mientras esperamos. */
+        struct timeval timeout = { .tv_sec = 1, .tv_usec = 0 };
+        int ret = select(fd + 1, &fds, NULL, NULL, &timeout);
+        if (ret < 0)
+        {
+            if (errno == EINTR) continue;  /* senal recibida, re-evaluar */
+            fprintf(stderr, "select() en monitor_usb fallo: %s\n", strerror(errno));
+            break;
+        }
+        if (ret == 0) continue;  /* timeout, vuelve a comprobar la flag */
+
+        if (FD_ISSET(fd, &fds))
         {
             struct udev_device *dev = udev_monitor_receive_device(mon);
             if (dev)

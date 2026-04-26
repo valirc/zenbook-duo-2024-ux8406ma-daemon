@@ -10,10 +10,12 @@
 #include "comun.h"
 #include "teclado.h"
 #include "pantalla.h"
+#include "audio.h"
 #include "monitor_bluetooth.h"
 #include "monitor_orientacion.h"
 #include "monitor_teclado_usb.h"
 #include "config.h"
+#include "runtime.h"
 
 /*
  * Función para imprimir la forma de uso (similar al '*)' del script bash.
@@ -75,6 +77,12 @@ int main(int argc, char *argv[])
     else if (strcmp(command, "daemon") == 0)
     {
         printf("Iniciando daemon...\n");
+
+        if (zbd_install_signal_handlers() != 0)
+        {
+            return EXIT_FAILURE;
+        }
+
         pthread_t hilo_orientacion = 0, hilo_modo_deteccion = 0;
 
         if (pthread_create(&hilo_orientacion, NULL, monitorizar_cambios_orientacion, NULL) != 0)

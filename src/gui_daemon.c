@@ -9,6 +9,7 @@
 #include "monitor_orientacion.h"
 #include "monitor_teclado_usb.h"
 #include "audio.h"
+#include "runtime.h"
 
 static AppIndicator *indicator;
 static pthread_t hilo_orientacion;
@@ -116,6 +117,11 @@ static GtkWidget* create_menu()
 int main(int argc, char **argv)
 {
     gtk_init(&argc, &argv);
+
+    if (zbd_install_signal_handlers() != 0)
+    {
+        return 1;
+    }
 
     if (cargar_configuracion() < 0) {
         return 1;
