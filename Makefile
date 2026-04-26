@@ -11,7 +11,6 @@ INCLUDE=-Wformat=2  $(OPTIMIZACION) -fPIC -pthread -g3 -O0 -rdynamic -Wall -Isrc
 all: clean app-obj app-bin permisos instalar
 
 app-obj:
-	$(CC) $(INCLUDE) -o obj/comun.o -c src/comun.c
 	$(CC) $(INCLUDE) -o obj/runtime.o -c src/runtime.c
 	$(CC) $(INCLUDE) -o obj/exec.o -c src/exec.c
 	$(CC) $(INCLUDE) -o obj/teclado.o -c src/teclado.c
@@ -25,8 +24,8 @@ app-obj:
 	$(CC) $(INCLUDE) -o obj/gui_daemon.o -c src/gui_daemon.c
 
 app-bin:
-	$(CC) $(INCLUDE) -o bin/zbd obj/comun.o obj/runtime.o obj/exec.o obj/teclado.o obj/pantalla.o obj/monitor_bluetooth.o obj/monitor_orientacion.o obj/monitor_teclado_usb.o obj/audio.o obj/config.o obj/main.o ${GTK_LIB}
-	$(CC) $(INCLUDE) -o bin/zbd-tray obj/comun.o obj/runtime.o obj/exec.o obj/teclado.o obj/pantalla.o obj/monitor_bluetooth.o obj/monitor_orientacion.o obj/monitor_teclado_usb.o obj/audio.o obj/config.o obj/gui_daemon.o ${GTK_LIB}
+	$(CC) $(INCLUDE) -o bin/zbd obj/runtime.o obj/exec.o obj/teclado.o obj/pantalla.o obj/monitor_bluetooth.o obj/monitor_orientacion.o obj/monitor_teclado_usb.o obj/audio.o obj/config.o obj/main.o ${GTK_LIB}
+	$(CC) $(INCLUDE) -o bin/zbd-tray obj/runtime.o obj/exec.o obj/teclado.o obj/pantalla.o obj/monitor_bluetooth.o obj/monitor_orientacion.o obj/monitor_teclado_usb.o obj/audio.o obj/config.o obj/gui_daemon.o ${GTK_LIB}
 
 instalar:
 	mkdir -p /etc/zbd/
