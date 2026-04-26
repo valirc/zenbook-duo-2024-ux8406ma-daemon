@@ -191,15 +191,15 @@ lint:
 	    -exec clang-tidy --quiet {} -- $(CPPFLAGS) $(CFLAGS) \;
 
 # ---- Tests -------------------------------------------------------------------
-TEST_SRCS    := $(wildcard tests/*.c)
-TEST_BINS    := $(patsubst tests/%.c,bin/test_%,$(TEST_SRCS))
+TEST_SRCS    := $(wildcard tests/test_*.c)
+TEST_BINS    := $(patsubst tests/test_%.c,bin/test_%,$(TEST_SRCS))
 
 test: $(TEST_BINS)
 	@status=0 ; for t in $(TEST_BINS) ; do \
 	    echo "  TEST     $$t" ; "$$t" || status=$$? ; \
 	done ; exit $$status
 
-bin/test_%: tests/%.c | $(BIN_DIR_BLD)
+bin/test_%: tests/test_%.c $(COMMON_OBJS) | $(BIN_DIR_BLD)
 	@echo "  CC+LD    $@"
 	@$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $< \
 	    $(filter-out $(SYSTEM_OBJ) $(TRAY_OBJ),$(COMMON_OBJS)) \

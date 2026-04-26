@@ -24,6 +24,14 @@
 int cargar_configuracion(void);
 
 /*
+ * Same as cargar_configuracion() but reads from `path` instead of
+ * CONFIG_PATH. Useful for tests and for letting either binary accept
+ * an explicit `--config /path/to/file` argument. Passing NULL falls
+ * back to CONFIG_PATH.
+ */
+int cargar_configuracion_desde(const char *path);
+
+/*
  * Free the global cfg struct. Idempotent.
  */
 void cfg_release(void);

@@ -200,11 +200,18 @@ static int set_string(char **dst, const char *value, const char *key)
 
 int cargar_configuracion(void)
 {
-    FILE *config_file = fopen(CONFIG_PATH, "r");
+    return cargar_configuracion_desde(CONFIG_PATH);
+}
+
+int cargar_configuracion_desde(const char *path)
+{
+    if (!path) path = CONFIG_PATH;
+
+    FILE *config_file = fopen(path, "r");
     if (!config_file)
     {
         fprintf(stderr, "config: no puedo abrir %s: %s\n",
-                CONFIG_PATH, strerror(errno));
+                path, strerror(errno));
         return -1;
     }
 
