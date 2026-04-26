@@ -90,24 +90,24 @@ void *monitorizar_cambios_teclado_usb(void *arg)
                     {
                         printf("Teclado conectado\n");
 
-                        if (monitor_estado("eDP-2"))
-                        {
-                            printf("El teclado no está conectado y eDP-2 está encendida. Apagando eDP-2...\n");
-                            configurar_monitores("apagar");
-                            usleep(250000);
-                            poner_fondo_1_monitor();
-                        }
-                    }
-                    else if (!strcmp(action, "remove"))
-                    {
-                        printf("Teclado desconectado\n");
-
                         if (!monitor_estado("eDP-2"))
                         {
                             printf("El teclado está conectado y eDP-2 está apagada. Encendiendo eDP-2...\n");
                             configurar_monitores("encender");
                             usleep(250000);
                             poner_fondo_2_monitores();
+                        }
+                    }
+                    else if (!strcmp(action, "remove"))
+                    {
+                        printf("Teclado desconectado\n");
+
+                        if (monitor_estado("eDP-2"))
+                        {
+                            printf("El teclado no está conectado y eDP-2 está encendida. Apagando eDP-2...\n");
+                            configurar_monitores("apagar");
+                            usleep(250000);
+                            poner_fondo_1_monitor();
                         }
                     }
                 }
