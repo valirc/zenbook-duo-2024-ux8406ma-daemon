@@ -13,6 +13,9 @@ bin/
 *.o
 *.so
 *.deb
+*.ddeb
+*.buildinfo
+*.changes
 *.tar.gz
 build/
 debian/.debhelper/
@@ -20,6 +23,8 @@ debian/files
 debian/*.substvars
 debian/*.log
 debian/zbd*/
+debian/zbd.*.debhelper
+debian/debhelper-build-stamp
 
 # Tests / coverage
 *.gcno
