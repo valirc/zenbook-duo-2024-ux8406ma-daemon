@@ -1,0 +1,61 @@
+# zbd-tray.service — user-session tray and event monitor.
+#
+# This is a user unit (loaded by `systemctl --user`) that runs in
+# the user's graphical session. It owns:
+#   - the GTK tray icon (libayatana-appindicator),
+#   - the Bluetooth connection monitor (bluetoothctl --monitor),
+#   - the udev USB monitor on the configured port path,
+#   - the iio-sensor-proxy orientation monitor,
+#   - the wallpaper and display reconfiguration calls (which talk
+#     to the user's compositor over the user D-Bus session).
+#
+# It does NOT need root: brightness/battery/DMIC happen in the
+# system service zbd-system.service. A future commit will introduce
+# a polkit policy + D-Bus IPC so the tray can ask zbd-system to
+# change the brightness on the fly without dropping privileges.
+
+[Unit]
+Description=zbd-tray: Zenbook Duo session monitors and tray icon
+Documentation=https://github.com/valirc/zenbook-duo-2024-ux8406ma-daemon
+After=graphical-session.target
+PartOf=graphical-session.target
+Requisite=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/zbd-tray
+Restart=on-failure
+RestartSec=3s
+
+# Hardening for the user binary. It calls into:
+#   - libayatana-appindicator + gtk3 (user X11/Wayland),
+#   - libusb (HID for the keyboard backlight - only over D-Bus to
+#     the system service in the final design; for now over libusb
+#     directly when the user runs the tray as root, which is rare),
+#   - libudev netlink monitor,
+#   - subprocesses: bluetoothctl, feh, xrandr/gdctl, pactl.
+#
+# We restrict only what the user binary genuinely does not need;
+# the UI stack reads many directories so ProtectSystem must stay at
+# `false` (otherwise GTK theme/icon/cursor lookups fail).
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @debug @swap @reboot @raw-io
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=zbd-tray
+
+[Install]
+WantedBy=graphical-session.target

@@ -1,0 +1,93 @@
+# zbd-system.service — apply hardware-level settings at boot.
+#
+# This is a one-shot system service that runs at boot to:
+#   - cap the battery charge at the configured threshold
+#     (writes /sys/class/power_supply/BAT0/charge_control_end_threshold),
+#   - apply the configured screen and keyboard backlight defaults,
+#   - load the DMIC raw PulseAudio source.
+#
+# Until the full system/tray split with D-Bus + polkit lands, the
+# user-session zbd-tray.service handles the runtime monitors
+# (Bluetooth, USB, accelerometer). That service does not need root.
+#
+# This unit deliberately uses Type=oneshot + RemainAfterExit=yes so
+# it sticks around as "active (exited)" and a `systemctl restart
+# zbd-system` re-applies the settings without leaving zombie
+# processes.
+
+[Unit]
+Description=zbd-system: Zenbook Duo hardware tunables (brightness, battery, DMIC)
+Documentation=https://github.com/valirc/zenbook-duo-2024-ux8406ma-daemon
+After=multi-user.target sound.target
+Wants=sound.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Apply defaults from /etc/zbd/zbd.conf. The binary already validates
+# every value before touching /sys, so a malformed config aborts
+# cleanly with a journal entry instead of half-applying.
+ExecStart=/usr/local/sbin/zbd-system limitar-carga-bateria 80
+ExecStart=/usr/local/sbin/zbd-system set-brillo-pantalla   30
+ExecStart=/usr/local/sbin/zbd-system set-brillo-teclado    1
+# Reaplicar los mismos valores en restart para que `systemctl restart
+# zbd-system` sea efectivo.
+ExecReload=/usr/local/sbin/zbd-system limitar-carga-bateria 80
+ExecReload=/usr/local/sbin/zbd-system set-brillo-pantalla   30
+ExecReload=/usr/local/sbin/zbd-system set-brillo-teclado    1
+
+# === Hardening =============================================================
+# zbd-system writes a tiny set of paths and runs a tiny set of
+# external programs (pactl). Lock everything else down.
+
+# CAP_SYS_ADMIN is required by libusb_detach_kernel_driver() during
+# keyboard backlight changes. Drop everything else. AmbientCaps means
+# the binary itself can use them without setuid.
+CapabilityBoundingSet=CAP_SYS_ADMIN
+AmbientCapabilities=CAP_SYS_ADMIN
+
+# Filesystem
+ProtectSystem=strict
+ReadWritePaths=/sys/class/backlight /sys/class/power_supply
+ProtectHome=yes
+PrivateTmp=yes
+# libusb necesita /dev/bus/usb para detach_kernel_driver y SET_REPORT.
+PrivateDevices=no
+DevicePolicy=closed
+DeviceAllow=/dev/bus/usb rw
+
+# Kernel & process
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+NoNewPrivileges=yes
+
+# Network: zbd-system never reaches out.
+PrivateNetwork=yes
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX
+
+# Syscall surface
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @debug @mount @swap @reboot @raw-io
+
+# Memory
+MemoryDenyWriteExecute=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=zbd-system
+
+[Install]
+WantedBy=multi-user.target
