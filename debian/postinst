@@ -1,0 +1,25 @@
+#!/bin/sh
+# postinst — finalize installation: enable system service.
+
+set -e
+
+case "$1" in
+    configure)
+        # Reload systemd so it picks up the newly-installed unit.
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload || true
+            # Enable the system service by default; the user service
+            # (zbd-tray) is an opt-in per user via `systemctl --user`.
+            systemctl enable zbd-system.service || true
+        fi
+    ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+    ;;
+    *)
+        echo "postinst called with unknown argument: $1" >&2
+        exit 1
+    ;;
+esac
+
+#DEBHELPER#
+exit 0

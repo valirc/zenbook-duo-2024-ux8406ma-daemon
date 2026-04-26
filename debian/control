@@ -1,0 +1,53 @@
+Source: zbd
+Section: utils
+Priority: optional
+Maintainer: marcos <marcos@anexa.net>
+Build-Depends:
+ debhelper-compat (= 13),
+ pkg-config,
+ libgtk-3-dev,
+ libayatana-appindicator3-dev,
+ libusb-1.0-0-dev,
+ libudev-dev,
+ libglib2.0-dev,
+ libcriterion-dev
+Standards-Version: 4.6.2
+Homepage: https://github.com/valirc/zenbook-duo-2024-ux8406ma-daemon
+Vcs-Git: https://github.com/valirc/zenbook-duo-2024-ux8406ma-daemon.git
+Vcs-Browser: https://github.com/valirc/zenbook-duo-2024-ux8406ma-daemon
+Rules-Requires-Root: no
+
+Package: zbd
+Architecture: amd64 arm64
+Depends:
+ ${shlibs:Depends},
+ ${misc:Depends},
+ feh,
+ bluez,
+ pulseaudio-utils | pipewire-pulse,
+ iio-sensor-proxy
+Recommends:
+ x11-xserver-utils,
+ gnome-control-center
+Suggests:
+ wlr-randr
+Description: Linux daemon for the ASUS ZenBook Duo 2024 (UX8406MA)
+ zbd fills the gap between the upstream kernel/desktop stack and the
+ ASUS ZenBook Duo 2024 — a laptop with two stacked OLED panels and a
+ detachable Bluetooth/USB keyboard. It detects the keyboard
+ transition (attached vs detached), enables or disables the second
+ internal display (eDP-2) accordingly, sets per-output wallpapers,
+ drives the keyboard backlight via the vendor HID protocol, caps the
+ battery charge and wires the Intel Smart Sound DMIC into the
+ default PulseAudio source.
+ .
+ Two binaries are installed:
+   * /usr/sbin/zbd-system — small, hardened, oneshot service that
+     applies the persistent hardware tunables (backlight, battery,
+     keyboard backlight, DMIC) at boot.
+   * /usr/bin/zbd-tray   — GTK tray + event monitors (Bluetooth, USB,
+     iio-sensor-proxy) that runs in the user's graphical session.
+ .
+ The display backend is selected at runtime: xrandr on X11, gdctl on
+ Wayland with GNOME (default on Ubuntu 26.04). A polkit policy and
+ D-Bus interface for runtime privileged operations are planned.

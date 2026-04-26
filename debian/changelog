@@ -1,0 +1,18 @@
+zbd (2.0.0~dev1-1) UNRELEASED; urgency=medium
+
+  * Initial Debian packaging of the refactored zbd 2.0 development
+    branch. The codebase has been split into:
+      - a hardened oneshot system service (zbd-system) that applies
+        battery threshold, backlight and DMIC defaults at boot,
+      - a user-session GTK tray (zbd-tray) that owns the runtime
+        monitors (Bluetooth, USB, iio-sensor-proxy).
+  * Pluggable display backends (xrandr / gdctl) so the daemon works
+    on both X11 and Wayland-with-GNOME (default on Ubuntu 26.04).
+  * Strict configuration validation, shell-free command execution,
+    proper SIGINT/SIGTERM handling, criterion-based unit tests,
+    -fPIE -pie -Wl,-z,relro,-z,now release builds.
+  * Replaces the historical single-binary layout that mixed the
+    privileged operations and the user-facing GTK code in one
+    process.
+
+ -- marcos <marcos@anexa.net>  Sun, 26 Apr 2026 20:30:00 +0200

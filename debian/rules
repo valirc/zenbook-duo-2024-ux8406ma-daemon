@@ -1,0 +1,20 @@
+#!/usr/bin/make -f
+# debian/rules — delegate to the upstream Makefile.
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+export DH_VERBOSE = 1
+
+%:
+	dh $@
+
+# We always build the release configuration in the package.
+override_dh_auto_build:
+	$(MAKE) release
+
+# Run the criterion test suite during the package build.
+override_dh_auto_test:
+	$(MAKE) test || (echo "tests failed" >&2 ; exit 1)
+
+# Standard install hook routes through `make install` with DESTDIR.
+override_dh_auto_install:
+	$(MAKE) install DESTDIR=$(CURDIR)/debian/zbd PREFIX=/usr
