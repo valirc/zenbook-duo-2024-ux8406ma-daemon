@@ -150,11 +150,19 @@ install: release
 	$(INSTALL) -d $(DESTDIR)$(WALLPAPER_DIR)
 	$(INSTALL) -m 0644 fondos/bg_edp1.jpg $(DESTDIR)$(WALLPAPER_DIR)/
 	$(INSTALL) -m 0644 fondos/bg_edp2.jpg $(DESTDIR)$(WALLPAPER_DIR)/
-	@if [ -d systemd ]; then \
-	    echo "  INSTALL  systemd units" ; \
-	    $(INSTALL) -d $(DESTDIR)$(SYSTEMD_SYS) $(DESTDIR)$(SYSTEMD_USER) ; \
-	    [ -f systemd/zbd-system.service ] && $(INSTALL) -m 0644 systemd/zbd-system.service $(DESTDIR)$(SYSTEMD_SYS)/ || true ; \
-	    [ -f systemd/zbd-tray.service ]   && $(INSTALL) -m 0644 systemd/zbd-tray.service   $(DESTDIR)$(SYSTEMD_USER)/   || true ; \
+	@if [ -f systemd/zbd-system.service ]; then \
+	    echo "  INSTALL  systemd system unit" ; \
+	    $(INSTALL) -d $(DESTDIR)$(SYSTEMD_SYS) ; \
+	    $(INSTALL) -m 0644 systemd/zbd-system.service $(DESTDIR)$(SYSTEMD_SYS)/ ; \
+	  else \
+	    echo "  WARN     systemd/zbd-system.service no encontrado, no se instala" ; \
+	  fi
+	@if [ -f systemd/user/zbd-tray.service ]; then \
+	    echo "  INSTALL  systemd user unit" ; \
+	    $(INSTALL) -d $(DESTDIR)$(SYSTEMD_USER) ; \
+	    $(INSTALL) -m 0644 systemd/user/zbd-tray.service $(DESTDIR)$(SYSTEMD_USER)/ ; \
+	  else \
+	    echo "  WARN     systemd/user/zbd-tray.service no encontrado, no se instala" ; \
 	  fi
 	@if [ -d polkit ]; then \
 	    echo "  INSTALL  polkit policy" ; \
