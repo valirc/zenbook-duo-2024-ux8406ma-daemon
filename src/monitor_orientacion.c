@@ -1,12 +1,63 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
+#include <string.h>
 #include <glib-2.0/gio/gio.h>
 #include <glib-2.0/glib-unix.h>
 
 #include "comun.h"
 #include "monitor_orientacion.h"
 #include "runtime.h"
+#include "display.h"
+
+/*
+ * Map iio-sensor-proxy orientation strings to the rotation enum the
+ * display backend understands. iio-sensor-proxy emits one of:
+ *   "normal"    — top of the device is up.
+ *   "left-up"   — device rotated 90° clockwise (left edge up).
+ *   "right-up"  — device rotated 90° anti-clockwise (right edge up).
+ *   "bottom-up" — device upside down.
+ *
+ * We rotate eDP-1 by default; the second panel (eDP-2), when on,
+ * follows. The rotation strings come from the AccelerometerOrientation
+ * property of net.hadess.SensorProxy.
+ */
+static int orientation_to_rotation(const char *o, display_rotation *out)
+{
+    if (!o || !out) return -1;
+    if (!strcmp(o, "normal"))    { *out = DISPLAY_ROTATION_NORMAL;    return 0; }
+    if (!strcmp(o, "left-up"))   { *out = DISPLAY_ROTATION_LEFT_UP;   return 0; }
+    if (!strcmp(o, "right-up"))  { *out = DISPLAY_ROTATION_RIGHT_UP;  return 0; }
+    if (!strcmp(o, "bottom-up")) { *out = DISPLAY_ROTATION_BOTTOM_UP; return 0; }
+    return -1;
+}
+
+/*
+ * Apply `o` to the active outputs. Always rotates eDP-1; if eDP-2
+ * is currently enabled, rotates it too. Errors are logged but not
+ * propagated — a transient failure should not kill the monitor.
+ */
+static void apply_orientation(const char *o)
+{
+    display_rotation r;
+    if (orientation_to_rotation(o, &r) != 0)
+    {
+        fprintf(stderr, "monitor_orientacion: orientacion desconocida '%s'\n",
+                o ? o : "(null)");
+        return;
+    }
+    if (display_set_rotation("eDP-1", r) != 0)
+    {
+        fprintf(stderr, "monitor_orientacion: rotacion de eDP-1 a '%s' fallo\n", o);
+    }
+    if (display_is_output_on("eDP-2"))
+    {
+        if (display_set_rotation("eDP-2", r) != 0)
+        {
+            fprintf(stderr, "monitor_orientacion: rotacion de eDP-2 a '%s' fallo\n", o);
+        }
+    }
+}
 
 /* Callback para SIGTERM/SIGINT registrado via g_unix_signal_add: hace
  * salir el GMainLoop limpiamente para que el hilo pueda hacer cleanup. */
@@ -40,6 +91,7 @@ static void on_property_changed(
             const gchar *orientation = g_variant_get_string(value, NULL);
             snprintf(current_orientation, sizeof(current_orientation), "%s", orientation);
             printf("Orientation changed: %s\n", current_orientation);
+            apply_orientation(current_orientation);
         }
         g_variant_unref(value);
     }
@@ -82,6 +134,7 @@ void *monitorizar_cambios_orientacion(void *arg) {
         const gchar *orientation = g_variant_get_string(initial_orientation, NULL);
         snprintf(current_orientation, sizeof(current_orientation), "%s", orientation);
         printf("Initial orientation: %s\n", current_orientation);
+        apply_orientation(current_orientation);
         g_variant_unref(initial_orientation);
     } else {
         printf("Unable to get initial orientation.\n");
