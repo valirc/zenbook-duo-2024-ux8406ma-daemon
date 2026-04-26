@@ -54,8 +54,24 @@ static GtkWidget* create_menu()
 
     configurar_dmic_raw();
     on_start_orientacion();
-    on_start_bluetooth();
-    on_start_usb();
+
+    /* Solo un monitor del teclado a la vez: Bluetooth o USB, segun la
+     * configuracion. Lanzar ambos provoca que se pisen al cambiar el
+     * estado de eDP-2. */
+    if (cfg->modo_deteccion && !strcmp(cfg->modo_deteccion, "bluetooth"))
+    {
+        on_start_bluetooth();
+    }
+    else if (cfg->modo_deteccion && !strcmp(cfg->modo_deteccion, "udev"))
+    {
+        on_start_usb();
+    }
+    else
+    {
+        g_warning("modo_deteccion invalido o ausente ('%s'); el monitor "
+                  "del teclado no se inicia.",
+                  cfg->modo_deteccion ? cfg->modo_deteccion : "");
+    }
 
     // Submenú brillo de pantalla
     GtkWidget *submenu_pantalla = gtk_menu_new();
