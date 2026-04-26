@@ -1,0 +1,32 @@
+# Build artifacts
+obj/
+bin/
+
+# Editor
+*.swp
+*.swo
+*~
+.cache/
+.idea/
+
+# Compile / package
+*.o
+*.so
+*.deb
+*.tar.gz
+build/
+debian/.debhelper/
+debian/files
+debian/*.substvars
+debian/*.log
+debian/zbd*/
+
+# Tests / coverage
+*.gcno
+*.gcda
+*.gcov
+coverage/
+
+# Local/Personal
+.local/
+TODO.local
