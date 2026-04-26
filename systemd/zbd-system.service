@@ -42,13 +42,25 @@ ProtectSystem=strict
 ReadWritePaths=/sys/class/backlight /sys/class/power_supply
 ProtectHome=yes
 PrivateTmp=yes
-# libusb necesita /dev/bus/usb para detach_kernel_driver y SET_REPORT.
+# libusb enumera y abre dispositivos USB a traves de /dev/bus/usb/<bus>/<dev>.
+# Estas son device nodes con majors variables, asi que en lugar de listar
+# nodes especificos (DeviceAllow espera nodos de tipo `char-major:minor`,
+# no directorios) dejamos a la cgroup-device del cgroup v2 hacer su trabajo:
+#   - PrivateDevices=no        - el daemon ve los devices reales,
+#   - DevicePolicy=auto        - permite los devices que el cgroup permita
+#                                normalmente; sigue siendo mas restrictivo
+#                                que `strict` y mucho mas que `private`.
 PrivateDevices=no
-DevicePolicy=closed
-DeviceAllow=/dev/bus/usb rw
+DevicePolicy=auto
 
 # Kernel & process
-ProtectKernelTunables=yes
+# ProtectKernelTunables=yes monta /sys read-only globalmente y, en
+# kernels actuales, ReadWritePaths bajo /sys no consigue revertir
+# eso para los archivos individuales de /sys/class/backlight y
+# /sys/class/power_supply que el daemon necesita escribir. Por eso
+# se deja en `no`; los demas Protect*  siguen activos para el resto
+# del kernel surface (modules, logs, control groups, ...).
+ProtectKernelTunables=no
 ProtectKernelModules=yes
 ProtectKernelLogs=yes
 ProtectControlGroups=yes
@@ -61,10 +73,16 @@ RestrictNamespaces=yes
 LockPersonality=yes
 NoNewPrivileges=yes
 
-# Network: solo D-Bus (UNIX domain socket).
+# Network y address families.
+# - PrivateNetwork=yes: el daemon nunca habla TCP/IP.
+# - AF_UNIX:    requerido para D-Bus (socket Unix del system bus).
+# - AF_NETLINK: requerido por libusb (lee /sys via netlink uevent
+#               para enumerar dispositivos USB).
+# - IPAddressDeny=any: refuerzo de PrivateNetwork ante kernel sin
+#   namespaces, no añade superficie.
 PrivateNetwork=yes
 IPAddressDeny=any
-RestrictAddressFamilies=AF_UNIX
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
 
 # Syscall surface
 SystemCallArchitectures=native

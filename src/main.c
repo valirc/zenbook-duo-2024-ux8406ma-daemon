@@ -54,18 +54,28 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE; // Salir si no se puede cargar la configuración
     }
 
-    if (display_init() < 0)
-    {
-        fprintf(stderr, "display: ningun backend disponible; abortando.\n");
-        return EXIT_FAILURE;
-    }
-
-    /* Diagnostico al journal/stderr; stdout queda limpio para que un
-     * pipeline (shell, scripts) no ingiera estos mensajes. */
-    fprintf(stderr, "Configuracion cargada (backend display: %s).\n",
-            display_active_backend());
-
     const char *command = argv[1];
+
+    /* display_init solo se llama en los modos que realmente reconfiguran
+     * el compositor (daemon legacy con sus hilos de monitorizacion).
+     * Los CLI privilegiados y el modo D-Bus service no tocan pantallas:
+     * solo /sys (brillo, bateria) o el HID del teclado. Inicializar el
+     * backend ahi solo afade superficie de fallo (e.g. xrandr ausente)
+     * sin beneficio. */
+    if (strcmp(command, "daemon") == 0)
+    {
+        if (display_init() < 0)
+        {
+            fprintf(stderr, "display: ningun backend disponible; abortando.\n");
+            return EXIT_FAILURE;
+        }
+        fprintf(stderr, "Configuracion cargada (backend display: %s).\n",
+                display_active_backend());
+    }
+    else
+    {
+        fprintf(stderr, "Configuracion cargada.\n");
+    }
 
     if (strcmp(command, "limitar-carga-bateria") == 0)
     {
@@ -101,7 +111,11 @@ int main(int argc, char *argv[])
     }
     else if (strcmp(command, "service") == 0)
     {
-        printf("Arrancando servicio D-Bus en %s ...\n", ZBD_DBUS_BUS_NAME);
+        /* Diagnostico via stderr: stdout esta line-buffered cuando
+         * va al journal y los printf en el arranque pueden quedarse
+         * en el buffer hasta el primer \n + flush. fprintf(stderr)
+         * llega al journal de inmediato. */
+        fprintf(stderr, "Arrancando servicio D-Bus en %s ...\n", ZBD_DBUS_BUS_NAME);
         if (zbd_install_signal_handlers() != 0)
         {
             return EXIT_FAILURE;
@@ -110,10 +124,11 @@ int main(int argc, char *argv[])
          * entrar al event loop, para que un boot/restart deje el
          * sistema en el estado deseado sin necesidad de un servicio
          * oneshot adicional. */
-        printf("Aplicando defaults: brillo=%d, teclado=%d, bateria=%d\n",
-               cfg->pantalla_nivel_brillo,
-               cfg->teclado_nivel_brillo,
-               cfg->bateria_carga_maxima);
+        fprintf(stderr,
+                "Aplicando defaults: brillo=%d, teclado=%d, bateria=%d\n",
+                cfg->pantalla_nivel_brillo,
+                cfg->teclado_nivel_brillo,
+                cfg->bateria_carga_maxima);
         set_pantalla_brillo(cfg->pantalla_nivel_brillo);
         set_brillo_teclado(cfg->teclado_nivel_brillo);
         if (cfg->bateria_carga_maxima > 0)
@@ -125,7 +140,7 @@ int main(int argc, char *argv[])
     }
     else if (strcmp(command, "daemon") == 0)
     {
-        printf("Iniciando daemon...\n");
+        fprintf(stderr, "Iniciando daemon...\n");
 
         if (zbd_install_signal_handlers() != 0)
         {
