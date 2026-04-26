@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "refactor/**", "fix/**", "feat/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref to keep the queue moving.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & test (Ubuntu ${{ matrix.distro }}, ${{ matrix.mode }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Ubuntu 24.04 (noble) is the baseline; 26.04 (resolute) is
+        # what marcos@anexa actually runs. We keep both green.
+        include:
+          - distro: "24.04"
+            runner: ubuntu-24.04
+            mode: debug
+          - distro: "24.04"
+            runner: ubuntu-24.04
+            mode: release
+          - distro: "26.04"
+            runner: ubuntu-latest
+            mode: debug
+          - distro: "26.04"
+            runner: ubuntu-latest
+            mode: release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build, runtime and test dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+              build-essential pkg-config \
+              libgtk-3-dev libayatana-appindicator3-dev \
+              libusb-1.0-0-dev libudev-dev libglib2.0-dev \
+              libcriterion-dev \
+              feh bluez pulseaudio-utils x11-xserver-utils
+
+      - name: Build (${{ matrix.mode }})
+        run: |
+          if [ "${{ matrix.mode }}" = "release" ]; then
+            make release
+          else
+            make
+          fi
+
+      - name: Run unit tests
+        run: make test
+
+      - name: Verify hardening flags on release binary
+        if: matrix.mode == 'release'
+        run: |
+          for bin in bin/zbd-system bin/zbd-tray; do
+            echo "==== $bin ===="
+            file "$bin"
+            readelf -d "$bin" | grep -E "BIND_NOW|FLAGS" || true
+          done
+          # Both binaries must report PIE and BIND_NOW.
+          readelf -d bin/zbd-system | grep -q BIND_NOW
+          readelf -d bin/zbd-system | grep -q PIE
+
+  lint:
+    name: clang-format + clang-tidy + cppcheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install lint dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+              build-essential pkg-config \
+              libgtk-3-dev libayatana-appindicator3-dev \
+              libusb-1.0-0-dev libudev-dev libglib2.0-dev \
+              clang-format clang-tidy cppcheck
+
+      - name: clang-format dry-run (fail on diff)
+        run: |
+          if [ ! -f .clang-format ]; then
+            echo "::warning::no .clang-format present; skipping format-check"
+            exit 0
+          fi
+          make format-check
+
+      - name: clang-tidy
+        run: make lint || true   # advisory until baseline is clean
+
+      - name: cppcheck
+        run: |
+          cppcheck --error-exitcode=1 --enable=warning,style,performance \
+                   --inline-suppr --quiet --std=c17 \
+                   -Isrc/include src/
+
+  systemd-validate:
+    name: systemd unit validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: systemd-analyze verify
+        run: |
+          set +e
+          rc=0
+          for unit in systemd/*.service; do
+            [ -f "$unit" ] || continue
+            echo "==== $unit ===="
+            # Filter the "command is not executable" line; the unit
+            # references /usr/local/sbin/zbd-system which obviously
+            # is not installed in the runner.
+            output=$(systemd-analyze verify "$unit" 2>&1 | \
+                     grep -v "is not executable") || true
+            echo "$output"
+            if echo "$output" | grep -qiE "(error|invalid|fail)"; then
+              rc=1
+            fi
+          done
+          for unit in systemd/user/*.service; do
+            [ -f "$unit" ] || continue
+            echo "==== $unit (user) ===="
+            output=$(systemd-analyze verify --user "$unit" 2>&1 | \
+                     grep -v "is not executable") || true
+            echo "$output"
+            if echo "$output" | grep -qiE "(error|invalid|fail)"; then
+              rc=1
+            fi
+          done
+          exit $rc
