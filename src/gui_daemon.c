@@ -1,27 +1,29 @@
 /*
  * gui_daemon.c — zbd-tray: tray icon, monitor threads and config reload.
  *
- * Uses libayatana-appindicator-glib (GLib-only reimplementation of the
- * StatusNotifierItem/AppIndicator protocol) and GIO GMenu/GSimpleAction
- * instead of GTK3 GtkMenu widgets.  No GTK dependency — pure GLib/GIO.
+ * Uses tray_sni.c (GIO-based StatusNotifierItem) + libdbusmenu-glib
+ * (com.canonical.dbusmenu) for the context menu.  No GTK dependency.
  *
- * Menu model
- * ──────────
- * The tray menu is a static GMenu tree wired to a GSimpleActionGroup
- * (prefix "ind").  Radio-button behaviour is achieved via stateful
- * GSimpleActions with G_VARIANT_TYPE_STRING: each menu item carries an
- * action-detail like "ind.brillo-pantalla::20"; when activated the action
- * receives the target string as its parameter and sets its state to that
- * value — the tray renderer marks the matching item as checked.
+ * libayatana-appindicator-glib was dropped because it cannot share a D-Bus
+ * object path with DbusmenuServer: both try to register vtables at the
+ * same path and the second registration silently fails.  The custom SNI
+ * implementation registers at /StatusNotifierItem while DbusmenuServer
+ * registers at /StatusNotifierItem/Menu — no conflict.
+ *
+ * Radio-button state
+ * ──────────────────
+ * Items use toggle-type="radio" and toggle-state=1 for the checked item.
+ * g_items_brillo[] and g_items_teclado[] hold borrowed references to
+ * the individual level items so we can flip toggle-state on selection.
  *
  * Thread safety
  * ─────────────
- * All GMenu/GAction mutations happen on the GLib main thread via
- * g_idle_add() / g_timeout_add() callbacks.  The monitor pthreads only
- * call g_idle_add() to schedule work; they never touch GMenu directly.
+ * All DbusmenuMenuitem mutations happen on the GLib main thread via
+ * g_idle_add().  Monitor pthreads only call g_idle_add().
  */
 
-#include <libayatana-appindicator-glib/ayatana-appindicator.h>
+#include <libdbusmenu-glib/server.h>
+#include <libdbusmenu-glib/menuitem.h>
 #include <glib-unix.h>
 #include <libudev.h>
 #include <pthread.h>
@@ -40,17 +42,17 @@
 #include "runtime.h"
 #include "display.h"
 #include "ipc.h"
+#include "tray_sni.h"
 
 /* ---- module state --------------------------------------------------- */
 
-static AppIndicator       *indicator;
 static GMainLoop          *g_loop;
-static GSimpleActionGroup *g_actions;
-static GMenu              *g_menu;
-static GMenu              *g_submenu_primario;
-static GSimpleAction      *g_act_pantalla;
-static GSimpleAction      *g_act_teclado;
-static GSimpleAction      *g_act_primary;
+
+static DbusmenuServer     *g_dbus_server;
+static DbusmenuMenuitem   *g_root;
+static DbusmenuMenuitem   *g_items_brillo[10];  /* [0]=10% .. [9]=100% */
+static DbusmenuMenuitem   *g_items_teclado[4];  /* [0..3]              */
+static DbusmenuMenuitem   *g_submenu_primario;
 
 static pthread_t hilo_orientacion;
 static pthread_t hilo_bluetooth;
@@ -61,17 +63,29 @@ static int system_service_available = 0;
 
 /* ---- action callbacks ----------------------------------------------- */
 
-static void on_set_pantalla_brillo(GSimpleAction *act, GVariant *param,
+/*
+ * dbusmenu item_activated signal: void cb(DbusmenuMenuitem*, guint, gpointer)
+ */
+
+static void on_set_pantalla_brillo(DbusmenuMenuitem *item, guint timestamp,
                                    gpointer data)
 {
-    (void)data;
-    g_simple_action_set_state(act, param);
-    int nivel = atoi(g_variant_get_string(param, NULL));
+    (void)item; (void)timestamp;
+    int nivel = GPOINTER_TO_INT(data);
+
+    for (int i = 0; i < 10; i++) {
+        dbusmenu_menuitem_property_set_int(g_items_brillo[i],
+            DBUSMENU_MENUITEM_PROP_TOGGLE_STATE,
+            (i + 1) * 10 == nivel ? DBUSMENU_MENUITEM_TOGGLE_STATE_CHECKED
+                                  : DBUSMENU_MENUITEM_TOGGLE_STATE_UNCHECKED);
+    }
+
     if (system_service_available)
         zbd_ipc_client_set_screen_brightness(nivel);
     else
         set_pantalla_brillo(nivel);
     cfg->pantalla_nivel_brillo = nivel;
+
     if (monitor_estado("eDP-2")) {
         int sp = nivel * 235 / 100;
         if (sp < 10) sp = 10;
@@ -82,12 +96,19 @@ static void on_set_pantalla_brillo(GSimpleAction *act, GVariant *param,
     }
 }
 
-static void on_set_teclado_brillo(GSimpleAction *act, GVariant *param,
+static void on_set_teclado_brillo(DbusmenuMenuitem *item, guint timestamp,
                                   gpointer data)
 {
-    (void)data;
-    g_simple_action_set_state(act, param);
-    int nivel = atoi(g_variant_get_string(param, NULL));
+    (void)item; (void)timestamp;
+    int nivel = GPOINTER_TO_INT(data);
+
+    for (int i = 0; i <= 3; i++) {
+        dbusmenu_menuitem_property_set_int(g_items_teclado[i],
+            DBUSMENU_MENUITEM_PROP_TOGGLE_STATE,
+            i == nivel ? DBUSMENU_MENUITEM_TOGGLE_STATE_CHECKED
+                       : DBUSMENU_MENUITEM_TOGGLE_STATE_UNCHECKED);
+    }
+
     if (system_service_available)
         zbd_ipc_client_set_keyboard_backlight(nivel);
     else
@@ -95,52 +116,69 @@ static void on_set_teclado_brillo(GSimpleAction *act, GVariant *param,
     cfg->teclado_nivel_brillo = nivel;
 }
 
-static void on_set_primary_monitor(GSimpleAction *act, GVariant *param,
+static void on_set_primary_monitor(DbusmenuMenuitem *item, guint timestamp,
                                    gpointer data)
 {
-    (void)data;
-    g_simple_action_set_state(act, param);
-    const char *output = g_variant_get_string(param, NULL);
+    (void)item; (void)timestamp;
+    const char *output = (const char *)data;
     fprintf(stderr, "zbd-tray: monitor principal → %s\n", output);
     display_set_primary(output);
     set_pantalla_brillo(cfg->pantalla_nivel_brillo);
 }
 
-static void on_quit(GSimpleAction *act, GVariant *param, gpointer data)
+static void on_quit_item(DbusmenuMenuitem *item, guint timestamp, gpointer data)
 {
-    (void)act; (void)param; (void)data;
+    (void)item; (void)timestamp; (void)data;
     g_main_loop_quit(g_loop);
 }
 
 /* ---- primary-monitor submenu (rebuilt on DRM hotplug) --------------- */
 
-/*
- * Rebuild g_submenu_primario to show only physically-connected outputs
- * (eDP-1 always visible) and update the checked radio state.
- * Must be called from the main thread.
- */
 static void rebuild_primary_submenu(void)
 {
     static const char *candidates[] = {
         "HDMI-1", "HDMI-2", "DP-1", "DP-2", "DP-3", NULL
     };
 
-    g_menu_remove_all(g_submenu_primario);
+    /* Remove all existing children (copy list first — deletion invalidates it). */
+    GList *snap = g_list_copy(dbusmenu_menuitem_get_children(g_submenu_primario));
+    for (GList *l = snap; l; l = l->next)
+        dbusmenu_menuitem_child_delete(g_submenu_primario,
+                                      DBUSMENU_MENUITEM(l->data));
+    g_list_free(snap);
+
+    const char *cur = display_get_primary();
+    if (!cur) cur = "eDP-1";
 
     for (int i = 0; candidates[i]; i++) {
-        if (display_is_output_connected(candidates[i])) {
-            char action[64];
-            snprintf(action, sizeof(action), "ind.set-primary::%s", candidates[i]);
-            g_menu_append(g_submenu_primario, candidates[i], action);
-        }
+        if (!display_is_output_connected(candidates[i])) continue;
+        DbusmenuMenuitem *it = dbusmenu_menuitem_new();
+        dbusmenu_menuitem_property_set(it, DBUSMENU_MENUITEM_PROP_LABEL,
+                                       candidates[i]);
+        dbusmenu_menuitem_property_set(it, DBUSMENU_MENUITEM_PROP_TOGGLE_TYPE,
+                                       DBUSMENU_MENUITEM_TOGGLE_RADIO);
+        dbusmenu_menuitem_property_set_int(it, DBUSMENU_MENUITEM_PROP_TOGGLE_STATE,
+            !strcmp(candidates[i], cur) ? DBUSMENU_MENUITEM_TOGGLE_STATE_CHECKED
+                                        : DBUSMENU_MENUITEM_TOGGLE_STATE_UNCHECKED);
+        g_signal_connect(it, DBUSMENU_MENUITEM_SIGNAL_ITEM_ACTIVATED,
+                         G_CALLBACK(on_set_primary_monitor),
+                         (gpointer)candidates[i]);
+        dbusmenu_menuitem_child_append(g_submenu_primario, it);
+        g_object_unref(it);
     }
-    g_menu_append(g_submenu_primario, "eDP-1", "ind.set-primary::eDP-1");
 
-    if (g_act_primary) {
-        const char *cur = display_get_primary();
-        if (!cur) cur = "eDP-1";
-        g_simple_action_set_state(g_act_primary, g_variant_new_string(cur));
-    }
+    /* eDP-1 always present. */
+    DbusmenuMenuitem *edp1 = dbusmenu_menuitem_new();
+    dbusmenu_menuitem_property_set(edp1, DBUSMENU_MENUITEM_PROP_LABEL, "eDP-1");
+    dbusmenu_menuitem_property_set(edp1, DBUSMENU_MENUITEM_PROP_TOGGLE_TYPE,
+                                   DBUSMENU_MENUITEM_TOGGLE_RADIO);
+    dbusmenu_menuitem_property_set_int(edp1, DBUSMENU_MENUITEM_PROP_TOGGLE_STATE,
+        !strcmp("eDP-1", cur) ? DBUSMENU_MENUITEM_TOGGLE_STATE_CHECKED
+                              : DBUSMENU_MENUITEM_TOGGLE_STATE_UNCHECKED);
+    g_signal_connect(edp1, DBUSMENU_MENUITEM_SIGNAL_ITEM_ACTIVATED,
+                     G_CALLBACK(on_set_primary_monitor), (gpointer)"eDP-1");
+    dbusmenu_menuitem_child_append(g_submenu_primario, edp1);
+    g_object_unref(edp1);
 }
 
 /* ---- signal / reload callbacks -------------------------------------- */
@@ -152,11 +190,6 @@ static gboolean on_shutdown_signal(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
-/*
- * SIGHUP: re-read /etc/zbd/zbd.conf and re-apply all hardware settings.
- * Monitor threads keep running across the reload; they re-read cfg on
- * their next event.
- */
 static gboolean on_reload_config(gpointer data)
 {
     (void)data;
@@ -198,12 +231,22 @@ static gboolean on_reload_config(gpointer data)
     if (system_service_available && cfg->bateria_carga_maxima > 0)
         zbd_ipc_client_set_battery_threshold(cfg->bateria_carga_maxima);
 
-    /* Sync radio-button checked state to the newly loaded values. */
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%d", cfg->pantalla_nivel_brillo);
-    g_simple_action_set_state(g_act_pantalla, g_variant_new_string(buf));
-    snprintf(buf, sizeof(buf), "%d", cfg->teclado_nivel_brillo);
-    g_simple_action_set_state(g_act_teclado, g_variant_new_string(buf));
+    /* Sync radio-button checked states to reloaded config values. */
+    for (int i = 0; i < 10; i++) {
+        int nivel = (i + 1) * 10;
+        dbusmenu_menuitem_property_set_int(g_items_brillo[i],
+            DBUSMENU_MENUITEM_PROP_TOGGLE_STATE,
+            nivel == cfg->pantalla_nivel_brillo
+                ? DBUSMENU_MENUITEM_TOGGLE_STATE_CHECKED
+                : DBUSMENU_MENUITEM_TOGGLE_STATE_UNCHECKED);
+    }
+    for (int i = 0; i <= 3; i++) {
+        dbusmenu_menuitem_property_set_int(g_items_teclado[i],
+            DBUSMENU_MENUITEM_PROP_TOGGLE_STATE,
+            i == cfg->teclado_nivel_brillo
+                ? DBUSMENU_MENUITEM_TOGGLE_STATE_CHECKED
+                : DBUSMENU_MENUITEM_TOGGLE_STATE_UNCHECKED);
+    }
 
     fprintf(stderr, "zbd-tray: reload: completado\n");
     return G_SOURCE_CONTINUE;
@@ -229,10 +272,6 @@ static gboolean drm_schedule_rebuild(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
-/*
- * Watches udev for DRM connector hotplug events and schedules a debounced
- * menu rebuild on the GLib main thread.
- */
 static void *monitorizar_drm_hotplug(void *arg)
 {
     (void)arg;
@@ -276,84 +315,99 @@ static void *monitorizar_drm_hotplug(void *arg)
     return NULL;
 }
 
-/* ---- GAction setup -------------------------------------------------- */
+/* ---- dbusmenu tree setup -------------------------------------------- */
 
-static void setup_actions(void)
+static void setup_dbusmenu(void)
 {
-    g_actions = g_simple_action_group_new();
+    /*
+     * Register com.canonical.dbusmenu at the SNI menu sub-path.
+     * This is a different path from the SNI object itself, so there is
+     * no vtable conflict with the StatusNotifierItem registration.
+     */
+    g_dbus_server = dbusmenu_server_new(tray_sni_menu_path());
+    g_root        = dbusmenu_menuitem_new();
 
-    /* Brillo pantalla: stateful string action (values "10".."100"). */
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%d", cfg ? cfg->pantalla_nivel_brillo : 20);
-    g_act_pantalla = g_simple_action_new_stateful(
-        "brillo-pantalla", G_VARIANT_TYPE_STRING, g_variant_new_string(buf));
-    g_signal_connect(g_act_pantalla, "activate",
-                     G_CALLBACK(on_set_pantalla_brillo), NULL);
-    g_simple_action_group_insert(g_actions, G_ACTION(g_act_pantalla));
+    /* ---- Brillo pantalla (10%..100% radio group) ---- */
+    DbusmenuMenuitem *sub_p = dbusmenu_menuitem_new();
+    dbusmenu_menuitem_property_set(sub_p, DBUSMENU_MENUITEM_PROP_LABEL,
+                                   "Brillo pantalla");
+    dbusmenu_menuitem_property_set(sub_p, DBUSMENU_MENUITEM_PROP_CHILD_DISPLAY,
+                                   DBUSMENU_MENUITEM_CHILD_DISPLAY_SUBMENU);
 
-    /* Brillo teclado: stateful string action (values "0".."3"). */
-    snprintf(buf, sizeof(buf), "%d", cfg ? cfg->teclado_nivel_brillo : 1);
-    g_act_teclado = g_simple_action_new_stateful(
-        "brillo-teclado", G_VARIANT_TYPE_STRING, g_variant_new_string(buf));
-    g_signal_connect(g_act_teclado, "activate",
-                     G_CALLBACK(on_set_teclado_brillo), NULL);
-    g_simple_action_group_insert(g_actions, G_ACTION(g_act_teclado));
-
-    /* Monitor principal: stateful string action (connector names). */
-    const char *prim = display_get_primary();
-    if (!prim) prim = "eDP-1";
-    g_act_primary = g_simple_action_new_stateful(
-        "set-primary", G_VARIANT_TYPE_STRING, g_variant_new_string(prim));
-    g_signal_connect(g_act_primary, "activate",
-                     G_CALLBACK(on_set_primary_monitor), NULL);
-    g_simple_action_group_insert(g_actions, G_ACTION(g_act_primary));
-
-    /* Salir: simple non-stateful action. */
-    GSimpleAction *quit = g_simple_action_new("quit", NULL);
-    g_signal_connect(quit, "activate", G_CALLBACK(on_quit), NULL);
-    g_simple_action_group_insert(g_actions, G_ACTION(quit));
-    g_object_unref(quit);
-}
-
-/* ---- GMenu construction --------------------------------------------- */
-
-static void build_menu(void)
-{
-    g_menu = g_menu_new();
-
-    /* Brillo pantalla: 10%..100% radio group. */
-    GMenu *sub_p = g_menu_new();
-    for (int i = 10; i <= 100; i += 10) {
-        char label[8], action[48];
-        snprintf(label,  sizeof(label),  "%d%%", i);
-        snprintf(action, sizeof(action), "ind.brillo-pantalla::%d", i);
-        g_menu_append(sub_p, label, action);
+    int brillo_act = cfg ? cfg->pantalla_nivel_brillo : 20;
+    for (int i = 0; i < 10; i++) {
+        int nivel = (i + 1) * 10;
+        char label[8];
+        snprintf(label, sizeof(label), "%d%%", nivel);
+        DbusmenuMenuitem *it = dbusmenu_menuitem_new();
+        dbusmenu_menuitem_property_set(it, DBUSMENU_MENUITEM_PROP_LABEL, label);
+        dbusmenu_menuitem_property_set(it, DBUSMENU_MENUITEM_PROP_TOGGLE_TYPE,
+                                       DBUSMENU_MENUITEM_TOGGLE_RADIO);
+        dbusmenu_menuitem_property_set_int(it, DBUSMENU_MENUITEM_PROP_TOGGLE_STATE,
+            nivel == brillo_act ? DBUSMENU_MENUITEM_TOGGLE_STATE_CHECKED
+                                : DBUSMENU_MENUITEM_TOGGLE_STATE_UNCHECKED);
+        g_signal_connect(it, DBUSMENU_MENUITEM_SIGNAL_ITEM_ACTIVATED,
+                         G_CALLBACK(on_set_pantalla_brillo), GINT_TO_POINTER(nivel));
+        dbusmenu_menuitem_child_append(sub_p, it);
+        g_items_brillo[i] = it;  /* borrowed ref — parent owns it */
+        g_object_unref(it);
     }
-    g_menu_append_submenu(g_menu, "Brillo pantalla", G_MENU_MODEL(sub_p));
+    dbusmenu_menuitem_child_append(g_root, sub_p);
     g_object_unref(sub_p);
 
-    /* Brillo teclado: 0..3 radio group. */
-    GMenu *sub_t = g_menu_new();
+    /* ---- Brillo teclado (0..3 radio group) ---- */
+    DbusmenuMenuitem *sub_t = dbusmenu_menuitem_new();
+    dbusmenu_menuitem_property_set(sub_t, DBUSMENU_MENUITEM_PROP_LABEL,
+                                   "Brillo teclado");
+    dbusmenu_menuitem_property_set(sub_t, DBUSMENU_MENUITEM_PROP_CHILD_DISPLAY,
+                                   DBUSMENU_MENUITEM_CHILD_DISPLAY_SUBMENU);
+
+    int teclado_act = cfg ? cfg->teclado_nivel_brillo : 1;
     for (int i = 0; i <= 3; i++) {
-        char label[4], action[40];
-        snprintf(label,  sizeof(label),  "%d", i);
-        snprintf(action, sizeof(action), "ind.brillo-teclado::%d", i);
-        g_menu_append(sub_t, label, action);
+        char label[4];
+        snprintf(label, sizeof(label), "%d", i);
+        DbusmenuMenuitem *it = dbusmenu_menuitem_new();
+        dbusmenu_menuitem_property_set(it, DBUSMENU_MENUITEM_PROP_LABEL, label);
+        dbusmenu_menuitem_property_set(it, DBUSMENU_MENUITEM_PROP_TOGGLE_TYPE,
+                                       DBUSMENU_MENUITEM_TOGGLE_RADIO);
+        dbusmenu_menuitem_property_set_int(it, DBUSMENU_MENUITEM_PROP_TOGGLE_STATE,
+            i == teclado_act ? DBUSMENU_MENUITEM_TOGGLE_STATE_CHECKED
+                             : DBUSMENU_MENUITEM_TOGGLE_STATE_UNCHECKED);
+        g_signal_connect(it, DBUSMENU_MENUITEM_SIGNAL_ITEM_ACTIVATED,
+                         G_CALLBACK(on_set_teclado_brillo), GINT_TO_POINTER(i));
+        dbusmenu_menuitem_child_append(sub_t, it);
+        g_items_teclado[i] = it;  /* borrowed ref — parent owns it */
+        g_object_unref(it);
     }
-    g_menu_append_submenu(g_menu, "Brillo teclado", G_MENU_MODEL(sub_t));
+    dbusmenu_menuitem_child_append(g_root, sub_t);
     g_object_unref(sub_t);
 
-    /* Monitor principal: dynamic items populated by rebuild_primary_submenu(). */
-    g_submenu_primario = g_menu_new();
+    /* ---- Monitor principal (dynamic, rebuilt on hotplug) ---- */
+    g_submenu_primario = dbusmenu_menuitem_new();
+    dbusmenu_menuitem_property_set(g_submenu_primario,
+                                   DBUSMENU_MENUITEM_PROP_LABEL,
+                                   "Monitor principal");
+    dbusmenu_menuitem_property_set(g_submenu_primario,
+                                   DBUSMENU_MENUITEM_PROP_CHILD_DISPLAY,
+                                   DBUSMENU_MENUITEM_CHILD_DISPLAY_SUBMENU);
     rebuild_primary_submenu();
-    g_menu_append_submenu(g_menu, "Monitor principal",
-                          G_MENU_MODEL(g_submenu_primario));
+    dbusmenu_menuitem_child_append(g_root, g_submenu_primario);
 
-    /* Separator + Salir in their own section. */
-    GMenu *sec = g_menu_new();
-    g_menu_append(sec, "Salir", "ind.quit");
-    g_menu_append_section(g_menu, NULL, G_MENU_MODEL(sec));
-    g_object_unref(sec);
+    /* ---- Separator ---- */
+    DbusmenuMenuitem *sep = dbusmenu_menuitem_new();
+    dbusmenu_menuitem_property_set(sep, DBUSMENU_MENUITEM_PROP_TYPE, "separator");
+    dbusmenu_menuitem_child_append(g_root, sep);
+    g_object_unref(sep);
+
+    /* ---- Salir ---- */
+    DbusmenuMenuitem *quit_it = dbusmenu_menuitem_new();
+    dbusmenu_menuitem_property_set(quit_it, DBUSMENU_MENUITEM_PROP_LABEL, "Salir");
+    g_signal_connect(quit_it, DBUSMENU_MENUITEM_SIGNAL_ITEM_ACTIVATED,
+                     G_CALLBACK(on_quit_item), NULL);
+    dbusmenu_menuitem_child_append(g_root, quit_it);
+    g_object_unref(quit_it);
+
+    dbusmenu_server_set_root(g_dbus_server, g_root);
 }
 
 /* ---- entry point ---------------------------------------------------- */
@@ -380,17 +434,13 @@ int main(int argc, char **argv)
 
     g_loop = g_main_loop_new(NULL, FALSE);
 
-    setup_actions();
-    build_menu();
-
-    /* Icon registered in /usr/share/icons/hicolor/scalable/apps/ by make
-     * install. The tray extension resolves it by name from the hicolor theme. */
-    indicator = app_indicator_new("zbd-indicator", "zbd-tray",
-                                  APP_INDICATOR_CATEGORY_HARDWARE);
-    app_indicator_set_status(indicator, APP_INDICATOR_STATUS_ACTIVE);
-    app_indicator_set_icon(indicator, "zbd-tray", "ZBD Tray");
-    app_indicator_set_menu(indicator, g_menu);
-    app_indicator_set_actions(indicator, g_actions);
+    /*
+     * Register the StatusNotifierItem and the dbusmenu context menu.
+     * Both calls schedule async D-Bus work; the registrations complete
+     * once g_main_loop_run() processes the first GLib iteration.
+     */
+    tray_sni_init("zbd-tray", "ZBD Tray");
+    setup_dbusmenu();
 
     /* DMIC — always direct from the tray (PipeWire is a session service). */
     configurar_dmic_raw();

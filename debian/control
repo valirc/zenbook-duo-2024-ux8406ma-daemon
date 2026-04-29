@@ -5,7 +5,7 @@ Maintainer: marcos <marcos@anexa.net>
 Build-Depends:
  debhelper-compat (= 13),
  pkg-config,
- libayatana-appindicator-glib-dev,
+ libdbusmenu-glib-dev,
  libusb-1.0-0-dev,
  libudev-dev,
  libglib2.0-dev,

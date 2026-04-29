@@ -66,7 +66,7 @@ WARNINGS     := -Wall -Wextra -Wformat=2 -Wformat-security \
                 -Wshadow -Wpointer-arith -Wstrict-prototypes \
                 -Wmissing-prototypes -Wcast-align -Wnull-dereference \
                 -Wno-deprecated-declarations
-PKG_DEPS     := ayatana-appindicator-glib libusb-1.0 \
+PKG_DEPS     := dbusmenu-glib-0.4 libusb-1.0 \
                 glib-2.0 gio-2.0 libudev libsystemd polkit-gobject-1
 PKG_CFLAGS   := $(shell $(PKG_CONFIG) --cflags $(PKG_DEPS))
 PKG_LIBS     := $(shell $(PKG_CONFIG) --libs   $(PKG_DEPS))
@@ -92,7 +92,8 @@ COMMON_SRCS  := $(SRC_DIR)/runtime.c $(SRC_DIR)/exec.c $(SRC_DIR)/config.c \
                 $(SRC_DIR)/ipc_server.c \
                 $(SRC_DIR)/monitor_bluetooth.c \
                 $(SRC_DIR)/monitor_orientacion.c \
-                $(SRC_DIR)/monitor_teclado_usb.c
+                $(SRC_DIR)/monitor_teclado_usb.c \
+                $(SRC_DIR)/tray_sni.c
 COMMON_OBJS  := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(COMMON_SRCS))
 
 # Entry points
