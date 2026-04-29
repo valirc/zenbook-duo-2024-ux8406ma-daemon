@@ -29,6 +29,8 @@ struct SConfiguracion
     int   audio_volumen_altavoces; /* 0..100; 0 = mute */
     char *pantalla_escala;         /* GNOME logical scale factor string, e.g. "1.2"; [1.0, 3.0] */
     char *pantalla_backend;        /* "auto" | "gdctl" | "xrandr" — overrides auto-detection */
+    int   dash_to_panel_gestionar; /* 0/1 — when 1, force D2P always-visible and sync its
+                                    * primary-monitor with zbd-tray's choice. Default 1. */
 };
 
 extern struct SConfiguracion *cfg;

@@ -43,6 +43,7 @@
 #include "display.h"
 #include "ipc.h"
 #include "tray_sni.h"
+#include "dash_to_panel.h"
 
 /* ---- module state --------------------------------------------------- */
 
@@ -116,14 +117,85 @@ static void on_set_teclado_brillo(DbusmenuMenuitem *item, guint timestamp,
     cfg->teclado_nivel_brillo = nivel;
 }
 
+/*
+ * Walk every child of the "Monitor principal" submenu and set
+ * toggle-state CHECKED on the one whose label equals `current`,
+ * UNCHECKED on the rest.  Dbusmenu's "radio" toggle-type is purely a
+ * rendering hint — the server is still in charge of enforcing the
+ * mutually-exclusive state.  Without an explicit update on every
+ * click the previous selection stays visually marked even though the
+ * compositor has already switched primary.
+ *
+ * The submenu is rebuilt from scratch on DRM hotplug, so labels are
+ * always exact connector names (e.g. "eDP-1", "DP-2").  Comparing on
+ * the label keeps the helper independent of how the activated signal
+ * was dispatched.
+ */
+static void primary_submenu_sync_toggle(const char *current)
+{
+    if (!g_submenu_primario || !current) return;
+    GList *children = dbusmenu_menuitem_get_children(g_submenu_primario);
+    for (GList *l = children; l; l = l->next) {
+        DbusmenuMenuitem *it = DBUSMENU_MENUITEM(l->data);
+        const char *label = dbusmenu_menuitem_property_get(
+            it, DBUSMENU_MENUITEM_PROP_LABEL);
+        gboolean checked = label && !strcmp(label, current);
+        dbusmenu_menuitem_property_set_int(it,
+            DBUSMENU_MENUITEM_PROP_TOGGLE_STATE,
+            checked ? DBUSMENU_MENUITEM_TOGGLE_STATE_CHECKED
+                    : DBUSMENU_MENUITEM_TOGGLE_STATE_UNCHECKED);
+    }
+}
+
 static void on_set_primary_monitor(DbusmenuMenuitem *item, guint timestamp,
                                    gpointer data)
 {
     (void)item; (void)timestamp;
     const char *output = (const char *)data;
     fprintf(stderr, "zbd-tray: monitor principal → %s\n", output);
+
+    /*
+     * Order matters here.  Dash-to-panel listens on TWO independent
+     * signals that both rebuild the panel via PanelManager._reset():
+     *
+     *   1. SETTINGS 'changed::primary-monitor'  — synchronous
+     *      handler, uses the current PanelSettings.monitorIdToIndex
+     *      cache and the current Main.layoutManager.monitors array.
+     *   2. Utils.DisplayWrapper.getMonitorManager() 'monitors-changed'
+     *      — async handler that first awaits PanelSettings.
+     *      setMonitorsInfo (a Mutter GetCurrentStateRemote round-trip)
+     *      to refresh monitorIdToIndex, THEN calls _reset().
+     *
+     * If we run gdctl FIRST (Mutter swaps primary, layoutManager
+     * monitors are re-ordered synchronously, monitors-changed is
+     * queued) and THEN write primary-monitor (changed::primary-monitor
+     * is queued), the synchronous handler #1 fires before #2's await
+     * completes.  At that moment monitorIdToIndex is stale (still maps
+     * the new id to its OLD logical-monitor index), but
+     * Main.layoutManager.monitors is already reordered → the cached
+     * index points at the WRONG entry of the new array.  The panel
+     * ends up on the wrong monitor for one rebuild cycle, producing
+     * the visible flicker and the missing-panel symptom on DP-2.
+     *
+     * Inverting the order eliminates the race: when the synchronous
+     * handler runs, BOTH the D2P cache and Main.layoutManager.monitors
+     * still reflect the pre-gdctl state — internally consistent —
+     * and the second _reset() (after monitors-changed completes its
+     * await) sees both views in their post-gdctl state — also
+     * internally consistent.  Final placement is correct in both
+     * cases regardless of which transition the user triggers.
+     */
+    if (cfg && cfg->dash_to_panel_gestionar)
+        d2p_set_primary_monitor(output);
+
     display_set_primary(output);
     set_pantalla_brillo(cfg->pantalla_nivel_brillo);
+
+    /* Sync the radio-button group with the new selection so the next
+     * time the user opens the tray the marker matches the actual
+     * primary.  Otherwise the user-visible state lags behind reality
+     * until a DRM hotplug rebuilds the submenu. */
+    primary_submenu_sync_toggle(output);
 }
 
 static void on_quit_item(DbusmenuMenuitem *item, guint timestamp, gpointer data)
@@ -441,6 +513,17 @@ int main(int argc, char **argv)
      */
     tray_sni_init("zbd-tray", "ZBD Tray");
     setup_dbusmenu();
+
+    /* dash-to-panel always-visible policy.  Forces D2P intellihide off,
+     * disables the conflicting `hidetopbar` extension, and pins the panel
+     * to the current primary monitor.  No-op when D2P is not installed
+     * or when the user opted out via /etc/zbd/zbd.conf. */
+    if (cfg && cfg->dash_to_panel_gestionar) {
+        d2p_apply_visibility_settings();
+        const char *cur_primary = display_get_primary();
+        if (cur_primary && *cur_primary)
+            d2p_set_primary_monitor(cur_primary);
+    }
 
     /* DMIC — always direct from the tray (PipeWire is a session service). */
     configurar_dmic_raw();

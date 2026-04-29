@@ -277,6 +277,7 @@ int cargar_configuracion_desde(const char *path)
     cfg->audio_volumen_altavoces = 80;
     cfg->pantalla_escala   = strdup("1.2");
     cfg->pantalla_backend  = strdup("auto");
+    cfg->dash_to_panel_gestionar = 1;
 
     char line[1024];
     int line_no = 0;
@@ -439,6 +440,19 @@ int cargar_configuracion_desde(const char *path)
                 rc = -1; break;
             }
             if (set_string(&cfg->pantalla_backend, value, key) != 0) { rc = -1; break; }
+        }
+        else if (!strcmp(key, "dash_to_panel_gestionar"))
+        {
+            if (!strcmp(value, "true") || !strcmp(value, "1") || !strcmp(value, "yes"))
+                cfg->dash_to_panel_gestionar = 1;
+            else if (!strcmp(value, "false") || !strcmp(value, "0") || !strcmp(value, "no"))
+                cfg->dash_to_panel_gestionar = 0;
+            else
+            {
+                fprintf(stderr, "config: 'dash_to_panel_gestionar' debe ser "
+                        "true|false (recibido: '%s')\n", value);
+                rc = -1; break;
+            }
         }
         else
         {

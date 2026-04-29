@@ -2,12 +2,19 @@
 #
 # This is a user unit (loaded by `systemctl --user`) that runs in
 # the user's graphical session. It owns:
-#   - the GLib tray icon (libayatana-appindicator-glib, no GTK),
+#   - the GLib tray icon (custom org.kde.StatusNotifierItem in
+#     src/tray_sni.c + libdbusmenu-glib for the context menu — no
+#     GTK, no libayatana-appindicator),
 #   - the Bluetooth connection monitor (bluetoothctl --monitor),
 #   - the udev USB monitor on the configured port path,
+#   - the udev DRM hotplug monitor (rebuilds the "Monitor principal"
+#     submenu when externals come and go),
 #   - the iio-sensor-proxy orientation monitor,
 #   - the wallpaper and display reconfiguration calls (gsettings +
-#     gdctl/xrandr talking to the compositor over the session D-Bus).
+#     gdctl/xrandr talking to the compositor over the session D-Bus),
+#   - the dash-to-panel always-visible policy and primary-monitor
+#     mirror (src/dash_to_panel.c — see /etc/zbd/zbd.conf
+#     `dash_to_panel_gestionar` to opt out).
 #
 # It does NOT need root: brightness/battery/DMIC happen in the
 # system service zbd-system.service via D-Bus + polkit.
@@ -27,15 +34,17 @@ Restart=on-failure
 RestartSec=3s
 
 # Hardening for the user binary. It calls into:
-#   - libayatana-appindicator-glib (pure GLib, no GTK/X11),
+#   - GIO/GLib for D-Bus (StatusNotifierItem + dbusmenu, libgio for
+#     dash-to-panel/hidetopbar gsettings) — pure GLib, no GTK/X11,
 #   - libusb (keyboard backlight via D-Bus to zbd-system, or directly
 #     when running as root for debugging),
-#   - libudev netlink monitor,
+#   - libudev netlink monitor (USB + DRM hotplug),
 #   - subprocesses: bluetoothctl, gsettings, gdctl/xrandr, pactl.
 #
 # We restrict only what the user binary genuinely does not need;
-# the UI stack reads many directories so ProtectSystem must stay at
-# `false` (otherwise GTK theme/icon/cursor lookups fail).
+# the UI stack and gsettings backends read many directories so
+# ProtectSystem must stay at `false` (otherwise theme/icon/cursor
+# and dconf lookups fail).
 NoNewPrivileges=yes
 RestrictSUIDSGID=yes
 RestrictRealtime=yes

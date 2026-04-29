@@ -93,7 +93,8 @@ COMMON_SRCS  := $(SRC_DIR)/runtime.c $(SRC_DIR)/exec.c $(SRC_DIR)/config.c \
                 $(SRC_DIR)/monitor_bluetooth.c \
                 $(SRC_DIR)/monitor_orientacion.c \
                 $(SRC_DIR)/monitor_teclado_usb.c \
-                $(SRC_DIR)/tray_sni.c
+                $(SRC_DIR)/tray_sni.c \
+                $(SRC_DIR)/dash_to_panel.c
 COMMON_OBJS  := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(COMMON_SRCS))
 
 # Entry points
