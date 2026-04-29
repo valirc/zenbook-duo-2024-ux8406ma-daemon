@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased] — 2026-04-29 (refactor/c-modernization)
 
+### Fixed (display)
+
+- **eDP centering off by ~288 px** on the UX8406MA when an external
+  monitor is connected. Root cause: `display_gdctl.c::gdctl_apply_layout()`
+  was reading the *currently-applied* eDP-1 scale from Mutter, but Mutter
+  snaps the next `--scale` argument to its fractional-scaling grid, so
+  the value used for the centering math (logical width = `phys_w / scale`)
+  diverged from the value Mutter actually applied after the call. Fixed
+  by snapping `pantalla_escala` against Mutter's `supported-scales` for
+  eDP-1's current mode and passing the same snapped value, formatted via
+  `g_ascii_formatd("%g")` (locale-independent), to gdctl's `--scale`.
+  Live verification on UX8406MA + Samsung 32" 4K @ scale 1.25:
+  `edp1_x` went from 672 (off) to 384 (centred — `(3072 - 2304) / 2`).
+- **Stale module-header comment in `src/display_gdctl.c`** still
+  describing wallpapers via feh — the implementation has used gsettings
+  since commit `2d8ba4c`. Comment refreshed and an explicit list of
+  options for future per-output wallpaper support added inline
+  (GNOME shell extension, layer-shell daemon, or upstream Mutter API).
+
 ### Added
 
 - **`src/dash_to_panel.c` + `src/include/dash_to_panel.h`** — integration

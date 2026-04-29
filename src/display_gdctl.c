@@ -7,11 +7,13 @@
  * Wayland; xrandr can read the layout (because XWayland exposes it)
  * but cannot change it.
  *
- * For wallpapers we still use feh(1): GNOME's gsettings background
- * key only addresses the primary monitor, while feh on XWayland
- * reaches both displays of the Zenbook Duo correctly even from a
- * Wayland session. Replacing this with gsettings + a per-monitor
- * extension is future work.
+ * Wallpapers are set through gsettings (org.gnome.desktop.background
+ * picture-uri / picture-uri-dark).  This is the native Wayland path
+ * and removes the historical feh + XWayland dependency.  GNOME does
+ * not yet expose a per-monitor background API without an extension,
+ * so the second wallpaper (eDP-2 / ScreenPad) is currently a no-op
+ * — see gdctl_set_wallpapers() and the TODO at the bottom of this
+ * file.
  *
  * For is_output_on() we do NOT shell out to `gdctl show`; we still
  * read the DRM sysfs file (/sys/class/drm/card<N>-<output>/enabled),
@@ -52,6 +54,7 @@
  */
 
 #include <errno.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -268,6 +271,146 @@ static int ext_logical_dims(const char *output_name, int *lw, int *lh)
     return 1;
 }
 
+/*
+ * Return the array of supported fractional scales for the CURRENT
+ * mode of `connector`, as advertised by
+ * org.gnome.Mutter.DisplayConfig.GetCurrentState.
+ *
+ * On success returns a g_malloc'd array of doubles and writes its
+ * length to *count.  Caller must g_free() the array.  Returns NULL
+ * on any error or if the connector / current-mode cannot be found.
+ *
+ * Used to pre-snap our --scale argument to Mutter's grid so that the
+ * value we use for the centering math is the same Mutter will end up
+ * applying.  Without this step, "1.2" silently becomes "1.25" inside
+ * Mutter while the centering arithmetic still uses 1.2 — the panels
+ * end up offset from the centre line.
+ */
+static double *mutter_connector_supported_scales(const char *connector, gsize *count)
+{
+    *count = 0;
+    GError *err = NULL;
+    GDBusProxy *proxy = g_dbus_proxy_new_for_bus_sync(G_BUS_TYPE_SESSION,
+        G_DBUS_PROXY_FLAGS_NONE, NULL,
+        "org.gnome.Mutter.DisplayConfig",
+        "/org/gnome/Mutter/DisplayConfig",
+        "org.gnome.Mutter.DisplayConfig",
+        NULL, &err);
+    if (!proxy) { if (err) g_error_free(err); return NULL; }
+
+    GVariant *result = g_dbus_proxy_call_sync(proxy, "GetCurrentState",
+        NULL, G_DBUS_CALL_FLAGS_NONE, 2000, NULL, &err);
+    g_object_unref(proxy);
+    if (!result) { if (err) g_error_free(err); return NULL; }
+
+    /*
+     * (u, a((ssss)a(siiddada{sv})a{sv}), a(iiduba(ssss)a{sv}), a{sv})
+     * The 2nd entry is the array of physical monitors.  Each entry:
+     *   ((connector, vendor, product, serial),
+     *    a(siiddada{sv}) modes,
+     *    a{sv} props)
+     * Each mode tuple:
+     *   (s id, i width, i height, d refresh, d preferred_scale,
+     *    ad supported_scales, a{sv} flags)
+     */
+    guint32 dserial;
+    GVariant *mons_v, *log_v, *props_v;
+    g_variant_get(result, "(u@a((ssss)a(siiddada{sv})a{sv})@a(iiduba(ssss)a{sv})@a{sv})",
+                  &dserial, &mons_v, &log_v, &props_v);
+
+    double *out = NULL;
+    GVariantIter mon_iter;
+    g_variant_iter_init(&mon_iter, mons_v);
+    GVariant *mon;
+    while ((mon = g_variant_iter_next_value(&mon_iter)) != NULL && !out) {
+        GVariant *info_t, *modes_v, *mprops;
+        g_variant_get(mon, "(@(ssss)@a(siiddada{sv})@a{sv})",
+                      &info_t, &modes_v, &mprops);
+        const char *c = NULL, *v = NULL, *p = NULL, *s = NULL;
+        g_variant_get(info_t, "(&s&s&s&s)", &c, &v, &p, &s);
+        if (c && !strcmp(c, connector)) {
+            GVariantIter md_iter;
+            g_variant_iter_init(&md_iter, modes_v);
+            GVariant *md;
+            while ((md = g_variant_iter_next_value(&md_iter)) != NULL && !out) {
+                const char *mid = NULL;
+                gint32 mw, mh;
+                gdouble mrefr, mpref;
+                GVariant *scales_v, *mflags;
+                g_variant_get(md, "(&siidd@ad@a{sv})",
+                              &mid, &mw, &mh, &mrefr, &mpref,
+                              &scales_v, &mflags);
+                gboolean is_current = FALSE;
+                g_variant_lookup(mflags, "is-current", "b", &is_current);
+                if (is_current) {
+                    gsize n = g_variant_n_children(scales_v);
+                    out = g_malloc_n(n ? n : 1, sizeof(double));
+                    for (gsize i = 0; i < n; i++) {
+                        GVariant *sv = g_variant_get_child_value(scales_v, i);
+                        out[i] = g_variant_get_double(sv);
+                        g_variant_unref(sv);
+                    }
+                    *count = n;
+                }
+                g_variant_unref(scales_v);
+                g_variant_unref(mflags);
+                g_variant_unref(md);
+            }
+        }
+        g_variant_unref(info_t);
+        g_variant_unref(modes_v);
+        g_variant_unref(mprops);
+        g_variant_unref(mon);
+    }
+
+    g_variant_unref(mons_v);
+    g_variant_unref(log_v);
+    g_variant_unref(props_v);
+    g_variant_unref(result);
+    return out;
+}
+
+/*
+ * Pick the value in the supported-scales list of `connector`'s
+ * current mode that is closest to `desired`.  Falls back to
+ * `desired` itself when the list cannot be obtained.
+ */
+static double mutter_snap_scale(const char *connector, double desired)
+{
+    gsize n = 0;
+    double *list = mutter_connector_supported_scales(connector, &n);
+    if (!list || n == 0) { g_free(list); return desired; }
+    double best = list[0];
+    double bestd = fabs(list[0] - desired);
+    for (gsize i = 1; i < n; i++) {
+        double d = fabs(list[i] - desired);
+        if (d < bestd) { bestd = d; best = list[i]; }
+    }
+    g_free(list);
+    return best;
+}
+
+/*
+ * Parse a non-negative decimal scale string in a locale-independent
+ * way (accepts both '.' and ',' as decimal mark).  Returns 0.0 on
+ * malformed input.
+ */
+static double parse_scale_locale_indep(const char *s)
+{
+    if (!s || !*s) return 0.0;
+    long ipart = 0, fpart = 0, fdiv = 1;
+    const char *p = s;
+    while (*p >= '0' && *p <= '9') ipart = ipart * 10 + (*p++ - '0');
+    if (*p == '.' || *p == ',') {
+        p++;
+        while (*p >= '0' && *p <= '9') {
+            fpart = fpart * 10 + (*p++ - '0');
+            fdiv *= 10;
+        }
+    }
+    return (double)ipart + (double)fpart / (double)fdiv;
+}
+
 /* ---- backend operations ------------------------------------------ */
 
 static int gdctl_probe(void)
@@ -362,36 +505,36 @@ static int gdctl_apply_layout(const char *eDP1_mode, const char *eDP1_rate,
      * is horizontally centred under the wider one.  On failure we fall    *
      * back to --above/--below (left-aligned, previous behaviour).        *
      *                                                                     *
-     * We parse scale_str ourselves — atof()/strtod() are locale-dependent *
-     * and misparse "1.2" as 1.0 under Spanish locale (where '.' is not   *
-     * the decimal separator).  We must use the configured scale (what we  *
-     * are about to pass to gdctl --scale) rather than the current Mutter  *
-     * scale for eDP-1, since gdctl will change eDP-1's scale to this     *
-     * value during the same call.                                         *
+     * Scale handling                                                       *
+     * ──────────────                                                      *
+     * Mutter snaps --scale to a fixed list of fractional values (the      *
+     * supported-scales array advertised in GetCurrentState).  If the      *
+     * config says "1.2" but Mutter's nearest step is 1.25, the centering  *
+     * math and the value gdctl applies WILL diverge — eDP-1 ends up off   *
+     * by (phys_w/1.2 − phys_w/1.25)/2 ≈ 48 px on a 2880-wide panel.       *
+     *                                                                     *
+     * We snap the configured scale to Mutter's supported-scales for       *
+     * eDP-1's CURRENT mode ourselves, and then pass the same snapped      *
+     * value to gdctl as a locale-independent string.  Result: a single    *
+     * gdctl call produces the exact layout we computed, no two-pass.     *
+     *                                                                     *
+     * Fallbacks (in order of preference):                                 *
+     *   1. snap config string against Mutter supported-scales.            *
+     *   2. config string parsed locale-independently (both '.'/',').     *
+     *   3. 1.25 if everything else failed.                                *
      * ------------------------------------------------------------------ */
-    /* Query the eDP-1 scale Mutter is CURRENTLY applying.  This is the
-     * value that determines the actual logical width of eDP-1 after our
-     * gdctl call (Mutter snaps --scale to its fractional-scaling grid and
-     * may not honour "1.2" if "1.25" is the nearest supported step).
-     * Using the Mutter-reported value avoids centering errors when the
-     * effective scale differs from the config string, and sidesteps the
-     * locale-dependent atof/strtod issue entirely.
-     *
-     * Fallback: if the Mutter query fails (session bus not up yet, or
-     * eDP-1 not in any logical monitor), parse scale_str ourselves in a
-     * locale-independent way (both '.' and ',' accepted as decimal mark). */
-    double scale_val = mutter_connector_scale("eDP-1");
-    if (scale_val <= 0.0) {
-        const char *p = scale_str;
-        long ipart = 0, fpart = 0, fdiv = 1;
-        while (*p >= '0' && *p <= '9') ipart = ipart * 10 + (*p++ - '0');
-        if (*p == '.' || *p == ',') {
-            p++;
-            while (*p >= '0' && *p <= '9') { fpart = fpart * 10 + (*p++ - '0'); fdiv *= 10; }
-        }
-        scale_val = (double)ipart + (double)fpart / (double)fdiv;
-    }
-    if (scale_val <= 0.0) scale_val = 1.25;
+    double scale_desired = parse_scale_locale_indep(scale_str);
+    if (scale_desired <= 0.0) scale_desired = 1.25;
+    double scale_val = mutter_snap_scale("eDP-1", scale_desired);
+    if (scale_val <= 0.0) scale_val = scale_desired;
+
+    /* Locale-independent decimal formatting for --scale.  g_ascii_formatd
+     * uses '.' regardless of LC_NUMERIC; "%g" trims trailing zeros and
+     * yields exactly the strings Mutter recognises ("1", "1.25", "1.5",
+     * "1.66667", "2"). */
+    char scale_arg[G_ASCII_DTOSTR_BUF_SIZE];
+    g_ascii_formatd(scale_arg, sizeof(scale_arg), "%g", scale_val);
+    scale_str = scale_arg; /* override: pass the snapped value to --scale */
 
     int edp_phys_w = 2880, edp_phys_h = 1800;
     sscanf(eDP1_mode, "%dx%d", &edp_phys_w, &edp_phys_h); /* parse from caller */
@@ -626,12 +769,26 @@ static int gdctl_set_wallpapers(const char *bg1, const char *bg2)
 {
     /* Set the primary wallpaper via gsettings — native Wayland, no XWayland.
      *
-     * GNOME does not currently expose a per-monitor wallpaper API without an
-     * extension.  We set picture-uri (light mode) and picture-uri-dark (dark
-     * mode) to bg1 so the wallpaper is applied regardless of the active
-     * colour scheme.  bg2 (ScreenPad eDP-2) is intentionally ignored: the
-     * ScreenPad typically shows a mirror or is black; a per-output API can be
-     * wired here when GNOME exposes one. */
+     * GNOME 50 does not expose a per-monitor wallpaper API without an
+     * extension.  Mutter's `org.gnome.desktop.background` schema is
+     * single-valued; the only options for true per-output wallpapers are:
+     *
+     *   1. A GNOME Shell extension (e.g. monitorWallpaper@manuel-quero,
+     *      "Wallpaper Slideshow", or similar) that listens on its own
+     *      gsettings keys per connector.  zbd would then write into the
+     *      extension's schema instead of (or in addition to) the upstream
+     *      org.gnome.desktop.background keys.  Adds a runtime dep.
+     *   2. A non-GNOME wallpaper daemon (swaybg/swww/hyprpaper) attached
+     *      to a layer-shell surface per output.  Out of scope for a
+     *      pure-Mutter session.
+     *   3. Wait for upstream Mutter / gnome-control-center to expose a
+     *      per-output picture-uri (open since at least 2018, no ETA).
+     *
+     * Until upstream gives us option 3, bg2 is intentionally ignored: we
+     * set picture-uri + picture-uri-dark to bg1 so the wallpaper is
+     * applied regardless of the active colour scheme.  The ScreenPad
+     * (eDP-2) typically shows a mirror or is black; that is acceptable
+     * for the shipped wallpaper assets in fondos/. */
     if (!bg1) { errno = EINVAL; return -1; }
 
     char uri[4096];
