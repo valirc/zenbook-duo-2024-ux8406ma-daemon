@@ -228,6 +228,7 @@ void cfg_release(void)
     free(cfg->pantalla_fondo_edp1);
     free(cfg->pantalla_fondo_edp2);
     free(cfg->pantalla_escala);
+    free(cfg->pantalla_backend);
     free(cfg);
     cfg = NULL;
 }
@@ -274,7 +275,8 @@ int cargar_configuracion_desde(const char *path)
      * from the config file (backward compatibility with older files). */
     cfg->audio_volumen_microfono = 70;
     cfg->audio_volumen_altavoces = 80;
-    cfg->pantalla_escala = strdup("1.2");
+    cfg->pantalla_escala   = strdup("1.2");
+    cfg->pantalla_backend  = strdup("auto");
 
     char line[1024];
     int line_no = 0;
@@ -427,6 +429,16 @@ int cargar_configuracion_desde(const char *path)
             {
                 rc = -1; break;
             }
+        }
+        else if (!strcmp(key, "pantalla_backend"))
+        {
+            if (strcmp(value, "auto") && strcmp(value, "gdctl") && strcmp(value, "xrandr"))
+            {
+                fprintf(stderr, "config: 'pantalla_backend' debe ser auto|gdctl|xrandr "
+                        "(recibido: '%s')\n", value);
+                rc = -1; break;
+            }
+            if (set_string(&cfg->pantalla_backend, value, key) != 0) { rc = -1; break; }
         }
         else
         {

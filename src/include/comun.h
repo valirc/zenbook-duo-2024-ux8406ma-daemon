@@ -28,6 +28,7 @@ struct SConfiguracion
     int   audio_volumen_microfono; /* 0..100; 0 = mute */
     int   audio_volumen_altavoces; /* 0..100; 0 = mute */
     char *pantalla_escala;         /* GNOME logical scale factor string, e.g. "1.2"; [1.0, 3.0] */
+    char *pantalla_backend;        /* "auto" | "gdctl" | "xrandr" — overrides auto-detection */
 };
 
 extern struct SConfiguracion *cfg;

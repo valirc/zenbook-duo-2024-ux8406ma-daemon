@@ -67,7 +67,7 @@ WARNINGS     := -Wall -Wextra -Wformat=2 -Wformat-security \
                 -Wmissing-prototypes -Wcast-align -Wnull-dereference \
                 -Wno-deprecated-declarations
 PKG_DEPS     := ayatana-appindicator-glib libusb-1.0 \
-                glib-2.0 gio-2.0 libudev libsystemd
+                glib-2.0 gio-2.0 libudev libsystemd polkit-gobject-1
 PKG_CFLAGS   := $(shell $(PKG_CONFIG) --cflags $(PKG_DEPS))
 PKG_LIBS     := $(shell $(PKG_CONFIG) --libs   $(PKG_DEPS))
 

@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "comun.h"
 #include "display.h"
 #include "display_backend.h"
 
@@ -114,8 +115,26 @@ int display_init(void)
         return 0; /* idempotent */
     }
 
-    /* TODO: honour cfg->pantalla_backend when the field is added. */
-    active = autodetect_backend();
+    /* Honour cfg->pantalla_backend if set to something other than "auto".
+     * Falls back to environment-based auto-detection when the config
+     * requests "auto" or when cfg is not yet loaded. */
+    if (cfg && cfg->pantalla_backend && strcmp(cfg->pantalla_backend, "auto") != 0) {
+        active = find_backend(cfg->pantalla_backend);
+        if (!active) {
+            fprintf(stderr,
+                    "display: backend '%s' (from config) not registered; "
+                    "falling back to auto-detection\n",
+                    cfg->pantalla_backend);
+        } else if (active->probe && !active->probe()) {
+            fprintf(stderr,
+                    "display: backend '%s' (from config) probe failed; "
+                    "falling back to auto-detection\n",
+                    cfg->pantalla_backend);
+            active = NULL;
+        }
+    }
+    if (!active)
+        active = autodetect_backend();
     if (!active)
     {
         fprintf(stderr,

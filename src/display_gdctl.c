@@ -646,23 +646,55 @@ static int gdctl_set_rotation(const char *output, display_rotation r)
                               edp2_on ? EDP1_DEFAULT_RATE : NULL);
 }
 
+/*
+ * Build a "file:///absolute/path" URI from an absolute path.
+ * Returns 1 on success with `uri` filled in, 0 if the path is not
+ * absolute or the buffer is too small.
+ */
+static int path_to_file_uri(const char *path, char *uri, size_t size)
+{
+    if (!path || path[0] != '/') return 0;
+    int n = snprintf(uri, size, "file://%s", path);
+    return (n > 0 && (size_t)n < size);
+}
+
 static int gdctl_set_wallpapers(const char *bg1, const char *bg2)
 {
-    /* feh works through XWayland on GNOME Wayland and addresses both
-     * Zenbook Duo panels correctly. Until we wire per-output
-     * wallpapers via gsettings + an extension, reuse it. */
+    /* Set the primary wallpaper via gsettings — native Wayland, no XWayland.
+     *
+     * GNOME does not currently expose a per-monitor wallpaper API without an
+     * extension.  We set picture-uri (light mode) and picture-uri-dark (dark
+     * mode) to bg1 so the wallpaper is applied regardless of the active
+     * colour scheme.  bg2 (ScreenPad eDP-2) is intentionally ignored: the
+     * ScreenPad typically shows a mirror or is black; a per-output API can be
+     * wired here when GNOME exposes one. */
     if (!bg1) { errno = EINVAL; return -1; }
-    if (bg2)
-    {
-        char *const args[] = {
-            "feh", "--bg-scale", (char *)bg1, "--bg-scale", (char *)bg2, NULL
-        };
-        return exec_cmd_argv("feh", args);
+
+    char uri[4096];
+    if (!path_to_file_uri(bg1, uri, sizeof(uri))) {
+        fprintf(stderr, "gdctl_set_wallpapers: ruta invalida: %s\n", bg1);
+        errno = EINVAL;
+        return -1;
     }
-    char *const args[] = {
-        "feh", "--bg-scale", (char *)bg1, NULL
+
+    (void)bg2; /* reserved for future per-monitor GNOME API */
+
+    /* gsettings set org.gnome.desktop.background picture-uri "file://..." */
+    char *const args_light[] = {
+        "gsettings", "set",
+        "org.gnome.desktop.background", "picture-uri",
+        uri, NULL
     };
-    return exec_cmd_argv("feh", args);
+    int r = exec_cmd_argv("gsettings", args_light);
+    if (r != 0) return r;
+
+    /* Also set the dark-mode variant so the wallpaper survives theme changes. */
+    char *const args_dark[] = {
+        "gsettings", "set",
+        "org.gnome.desktop.background", "picture-uri-dark",
+        uri, NULL
+    };
+    return exec_cmd_argv("gsettings", args_dark);
 }
 
 /* ---- primary management ------------------------------------------ */
