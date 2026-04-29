@@ -14,7 +14,7 @@
  * extension is future work.
  *
  * For is_output_on() we do NOT shell out to `gdctl show`; we still
- * read the DRM sysfs file (/sys/class/drm/card1-<output>/enabled),
+ * read the DRM sysfs file (/sys/class/drm/card<N>-<output>/enabled),
  * which the kernel keeps accurate regardless of the compositor.
  *
  * Rotation state
@@ -30,6 +30,25 @@
  * Both eDP panels rotate together: the Zenbook Duo has two stacked
  * displays that form a single physical unit, so they share one
  * rotation value.
+ *
+ * Centering
+ * ─────────
+ * When an external monitor is connected, gdctl_apply_layout() centres
+ * the internal eDP stack horizontally under it (or the external under
+ * the internal stack if the internal panels are wider). Absolute --x/--y
+ * coordinates are derived from:
+ *   1. The external monitor's native physical mode read from DRM sysfs
+ *      (/sys/class/drm/<card>-<conn>/modes, first line = preferred mode).
+ *   2. The external monitor's current logical scale obtained via the
+ *      Mutter D-Bus interface (org.gnome.Mutter.DisplayConfig
+ *      GetCurrentState). This is the actual scale Mutter is applying,
+ *      not an estimate.
+ *   logical_width  = physical_width  / mutter_scale
+ *   logical_height = physical_height / mutter_scale
+ *
+ * If the Mutter query fails (e.g. session bus not up yet) or the sysfs
+ * read fails, the code falls back to --above eDP-1 (prior behaviour,
+ * left-aligned).
  */
 
 #include <dirent.h>
@@ -38,6 +57,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <glib-2.0/gio/gio.h>
 
 #include "comun.h"
 #include "display.h"
@@ -158,6 +178,132 @@ static const char *detect_external_output(void)
     return NULL;
 }
 
+/* ---- external monitor dimension helpers ----------------------------- */
+
+/*
+ * Read the preferred (first) mode from the DRM connector's sysfs modes file.
+ * Returns 1 on success with *w and *h set, 0 if the file cannot be read.
+ */
+static int drm_preferred_mode(const char *gdctl_name, int *w, int *h)
+{
+    const char *drm_name = gdctl_name_to_drm(gdctl_name);
+    char path[256];
+    snprintf(path, sizeof(path), "/sys/class/drm/%s-%s/modes",
+             get_drm_card(), drm_name);
+    FILE *fp = fopen(path, "r");
+    if (!fp) return 0;
+    char line[32] = {0};
+    int ok = (fgets(line, sizeof(line), fp) != NULL);
+    fclose(fp);
+    if (!ok || !*line) return 0;
+    return sscanf(line, "%dx%d", w, h) == 2;
+}
+
+/*
+ * Query the current Mutter scale for the logical monitor containing
+ * `connector` via org.gnome.Mutter.DisplayConfig GetCurrentState.
+ * Returns the scale (e.g. 1.25) or 0.0 on failure.
+ *
+ * Calling this before a gdctl set gives us the scale Mutter is CURRENTLY
+ * applying to the external — which is the scale gdctl will preserve for it
+ * when we call `gdctl set` without an explicit --scale for that connector.
+ */
+static double mutter_connector_scale(const char *connector)
+{
+    GError *err = NULL;
+    GDBusProxy *proxy = g_dbus_proxy_new_for_bus_sync(
+        G_BUS_TYPE_SESSION,
+        G_DBUS_PROXY_FLAGS_NONE, NULL,
+        "org.gnome.Mutter.DisplayConfig",
+        "/org/gnome/Mutter/DisplayConfig",
+        "org.gnome.Mutter.DisplayConfig",
+        NULL, &err);
+    if (!proxy) {
+        if (err) g_error_free(err);
+        return 0.0;
+    }
+
+    GVariant *result = g_dbus_proxy_call_sync(proxy, "GetCurrentState",
+        NULL, G_DBUS_CALL_FLAGS_NONE, 2000, NULL, &err);
+    g_object_unref(proxy);
+    if (!result) {
+        if (err) g_error_free(err);
+        return 0.0;
+    }
+
+    /*
+     * Result type: (u, a((ssss)a(siiddada{sv})a{sv}), a(iiduba(ssss)a{sv}), a{sv})
+     * We only care about the logical_monitors (3rd element).
+     * Logical monitor tuple: (i x, i y, d scale, u transform, b primary,
+     *                          a(ssss) monitors, a{sv} properties)
+     */
+    guint32 serial;
+    GVariant *mons_v, *log_v, *props_v;
+    g_variant_get(result,
+                  "(u"
+                  "@a((ssss)a(siiddada{sv})a{sv})"
+                  "@a(iiduba(ssss)a{sv})"
+                  "@a{sv})",
+                  &serial, &mons_v, &log_v, &props_v);
+
+    double found_scale = 0.0;
+    int found = 0;
+
+    GVariantIter lm_iter;
+    g_variant_iter_init(&lm_iter, log_v);
+    GVariant *lm;
+    while (!found && (lm = g_variant_iter_next_value(&lm_iter)) != NULL) {
+        gint32 lm_x, lm_y;
+        gdouble lm_scale;
+        guint32 lm_tr;
+        gboolean lm_primary;
+        GVariant *lm_mons, *lm_pr;
+        g_variant_get(lm, "(iidub@a(ssss)@a{sv})",
+                      &lm_x, &lm_y, &lm_scale, &lm_tr, &lm_primary,
+                      &lm_mons, &lm_pr);
+
+        GVariantIter m_iter;
+        g_variant_iter_init(&m_iter, lm_mons);
+        GVariant *mon;
+        while (!found && (mon = g_variant_iter_next_value(&m_iter)) != NULL) {
+            const char *c, *v, *p, *s;
+            g_variant_get(mon, "(ssss)", &c, &v, &p, &s);
+            if (!strcmp(c, connector)) {
+                found_scale = lm_scale;
+                found = 1;
+            }
+            g_variant_unref(mon);
+        }
+
+        g_variant_unref(lm_mons);
+        g_variant_unref(lm_pr);
+        g_variant_unref(lm);
+    }
+
+    g_variant_unref(mons_v);
+    g_variant_unref(log_v);
+    g_variant_unref(props_v);
+    g_variant_unref(result);
+    return found_scale;
+}
+
+/*
+ * Compute the logical dimensions of an external output.
+ * Sets *lw and *lh to (physical_w / scale, physical_h / scale).
+ * Returns 1 on success, 0 if dimensions cannot be determined.
+ */
+static int ext_logical_dims(const char *output_name, int *lw, int *lh)
+{
+    int pw = 0, ph = 0;
+    if (!drm_preferred_mode(output_name, &pw, &ph) || pw == 0 || ph == 0)
+        return 0;
+    double scale = mutter_connector_scale(output_name);
+    if (scale <= 0.0) return 0;
+    *lw = (int)(pw / scale + 0.5);
+    *lh = (int)(ph / scale + 0.5);
+    return 1;
+}
+
 /* ---- backend operations ------------------------------------------ */
 
 static int gdctl_probe(void)
@@ -171,18 +317,32 @@ static int gdctl_probe(void)
  * topology on every call; partial mutations are not supported.
  *
  * Topology rules for the UX8406MA:
- *   eDP-1  — always on, primary, at the configured mode.
- *   eDP-2  — when on, placed BELOW eDP-1 at the same mode.
- *   HDMI-1 — included whenever a cable is physically present
- *             (HDMI-A-1 DRM connector), placed ABOVE eDP-1.
- *             This prevents keyboard attach/detach from stomping an
- *             active external monitor.
+ *   eDP-1  — always on, primary (or below external primary), at the
+ *             configured mode.  Horizontally centred relative to the
+ *             external monitor when one is present.
+ *   eDP-2  — when on, placed directly below eDP-1 (same x, same width).
+ *   External (HDMI/DP/Thunderbolt) — primary, placed above eDP-1.
+ *             Horizontally centred relative to eDP-1 if it is narrower.
+ *
+ * Positioning strategy:
+ *   When an external monitor is present and its logical dimensions can
+ *   be determined (DRM sysfs + Mutter scale query), explicit --x/--y
+ *   absolute coordinates are used for all logical monitors so that the
+ *   narrower stack is centred under the wider one.  If dimension
+ *   detection fails, the code falls back to --above/--below relative
+ *   placement (prior behaviour, left-aligned).
  *
  * Both eDP panels receive --transform from g_edp_rotation so that
  * layout rebuilds triggered by keyboard events preserve any rotation
  * previously set by the accelerometer monitor.
  *
- * Max argv slots used (scale+rotation+eDP2+HDMI): 2+10+11+5+1 = 29  (array sized at 32).
+ * Argv slots budget (worst case — ext + eDP2 + rotation + abs pos):
+ *   2 (gdctl set)
+ *  +14 (eDP-1: --lm [--primary] --monitor --mode --scale --x --y [--transform])
+ *  +13 (eDP-2: --lm --monitor --mode --x --y --scale [--transform])
+ *  + 8 (ext:   --lm [--primary] --monitor --x --y)
+ *  + 1 (NULL)
+ *  = 38  → array sized at 48.
  */
 static int gdctl_apply_layout(const char *eDP1_mode, const char *eDP1_rate,
                               int eDP2_on, const char *eDP2_mode, const char *eDP2_rate)
@@ -218,7 +378,6 @@ static int gdctl_apply_layout(const char *eDP1_mode, const char *eDP1_rate,
      * Auto: first connected external output; eDP-1 if nothing external. */
     const char *primary;
     if (g_primary_output[0]) {
-        /* Check physical presence of the manually-requested primary. */
         int req_connected = !strcmp(g_primary_output, "eDP-1") ? 1
                           : (ext_output && !strcmp(g_primary_output, ext_output));
         primary = req_connected ? g_primary_output
@@ -227,8 +386,101 @@ static int gdctl_apply_layout(const char *eDP1_mode, const char *eDP1_rate,
         primary = ext_on ? ext_output : "eDP-1";
     }
 
-    char *args[32];
+    /* ------------------------------------------------------------------ *
+     * Centering geometry                                                  *
+     *                                                                     *
+     * eDP logical size adjusted for the current rotation:                *
+     *   normal / 180°  → (phys_w / scale,  phys_h / scale)              *
+     *   90°   / 270°   → (phys_h / scale,  phys_w / scale)              *
+     *                                                                     *
+     * When an external monitor is present and its logical dimensions are  *
+     * determinable, we use absolute --x/--y so that the narrower stack   *
+     * is horizontally centred under the wider one.  On failure we fall    *
+     * back to --above/--below (left-aligned, previous behaviour).        *
+     *                                                                     *
+     * We parse scale_str ourselves — atof()/strtod() are locale-dependent *
+     * and misparse "1.2" as 1.0 under Spanish locale (where '.' is not   *
+     * the decimal separator).  We must use the configured scale (what we  *
+     * are about to pass to gdctl --scale) rather than the current Mutter  *
+     * scale for eDP-1, since gdctl will change eDP-1's scale to this     *
+     * value during the same call.                                         *
+     * ------------------------------------------------------------------ */
+    /* Query the eDP-1 scale Mutter is CURRENTLY applying.  This is the
+     * value that determines the actual logical width of eDP-1 after our
+     * gdctl call (Mutter snaps --scale to its fractional-scaling grid and
+     * may not honour "1.2" if "1.25" is the nearest supported step).
+     * Using the Mutter-reported value avoids centering errors when the
+     * effective scale differs from the config string, and sidesteps the
+     * locale-dependent atof/strtod issue entirely.
+     *
+     * Fallback: if the Mutter query fails (session bus not up yet, or
+     * eDP-1 not in any logical monitor), parse scale_str ourselves in a
+     * locale-independent way (both '.' and ',' accepted as decimal mark). */
+    double scale_val = mutter_connector_scale("eDP-1");
+    if (scale_val <= 0.0) {
+        const char *p = scale_str;
+        long ipart = 0, fpart = 0, fdiv = 1;
+        while (*p >= '0' && *p <= '9') ipart = ipart * 10 + (*p++ - '0');
+        if (*p == '.' || *p == ',') {
+            p++;
+            while (*p >= '0' && *p <= '9') { fpart = fpart * 10 + (*p++ - '0'); fdiv *= 10; }
+        }
+        scale_val = (double)ipart + (double)fpart / (double)fdiv;
+    }
+    if (scale_val <= 0.0) scale_val = 1.25;
+
+    int edp_phys_w = 2880, edp_phys_h = 1800;
+    sscanf(eDP1_mode, "%dx%d", &edp_phys_w, &edp_phys_h); /* parse from caller */
+
+    int edp_lw, edp_lh;
+    if (g_edp_rotation == DISPLAY_ROTATION_LEFT_UP ||
+        g_edp_rotation == DISPLAY_ROTATION_RIGHT_UP) {
+        edp_lw = (int)(edp_phys_h / scale_val + 0.5);
+        edp_lh = (int)(edp_phys_w / scale_val + 0.5);
+    } else {
+        edp_lw = (int)(edp_phys_w / scale_val + 0.5);
+        edp_lh = (int)(edp_phys_h / scale_val + 0.5);
+    }
+
+    /* Absolute positions (logical pixels). Computed when ext present. */
+    int ext_x = 0,  ext_y = 0;
+    int edp1_x = 0, edp1_y = 0;
+    int have_abs_pos = 0; /* 1 = use --x/--y; 0 = fallback --above/--below */
+
+    if (ext_on) {
+        int ext_lw = 0, ext_lh = 0;
+        if (ext_logical_dims(ext_output, &ext_lw, &ext_lh) && ext_lw > 0 && ext_lh > 0) {
+            have_abs_pos = 1;
+            /* Centre the narrower stack under the wider. */
+            if (ext_lw >= edp_lw) {
+                ext_x  = 0;
+                edp1_x = (ext_lw - edp_lw) / 2;
+            } else {
+                edp1_x = 0;
+                ext_x  = (edp_lw - ext_lw) / 2;
+            }
+            ext_y  = 0;
+            edp1_y = ext_lh; /* eDP-1 directly below external */
+            fprintf(stderr,
+                    "gdctl: centering — ext=%dx%d edp=%dx%d "
+                    "ext_x=%d edp1_x=%d edp1_y=%d\n",
+                    ext_lw, ext_lh, edp_lw, edp_lh,
+                    ext_x, edp1_x, edp1_y);
+        } else {
+            fprintf(stderr,
+                    "gdctl: cannot determine external dimensions for %s; "
+                    "falling back to --above eDP-1\n", ext_output);
+        }
+    }
+
+    /* ---- Build argv -------------------------------------------------- */
+    char *args[48];
     int n = 0;
+
+    /* Stack-allocated position string buffers (alive until exec_cmd_argv). */
+    char ext_x_s[16],  ext_y_s[16];
+    char edp1_x_s[16], edp1_y_s[16];
+    char edp2_x_s[16], edp2_y_s[16];
 
     args[n++] = "gdctl";
     args[n++] = "set";
@@ -239,28 +491,48 @@ static int gdctl_apply_layout(const char *eDP1_mode, const char *eDP1_rate,
     args[n++] = "--monitor"; args[n++] = "eDP-1";
     args[n++] = "--mode";    args[n++] = eDP1_spec;
     args[n++] = "--scale";   args[n++] = (char *)scale_str;
+    if (have_abs_pos) {
+        snprintf(edp1_x_s, sizeof(edp1_x_s), "%d", edp1_x);
+        snprintf(edp1_y_s, sizeof(edp1_y_s), "%d", edp1_y);
+        args[n++] = "--x"; args[n++] = edp1_x_s;
+        args[n++] = "--y"; args[n++] = edp1_y_s;
+    }
     if (rotated) {
         args[n++] = "--transform"; args[n++] = (char *)transform;
     }
 
-    /* eDP-2: below eDP-1 when on */
+    /* eDP-2: directly below eDP-1 (same x) */
     if (eDP2_on) {
         args[n++] = "--logical-monitor";
         args[n++] = "--monitor"; args[n++] = "eDP-2";
         args[n++] = "--mode";    args[n++] = eDP2_spec;
-        args[n++] = "--below";   args[n++] = "eDP-1";
-        args[n++] = "--scale";   args[n++] = (char *)scale_str;
+        if (have_abs_pos) {
+            snprintf(edp2_x_s, sizeof(edp2_x_s), "%d", edp1_x);
+            snprintf(edp2_y_s, sizeof(edp2_y_s), "%d", edp1_y + edp_lh);
+            args[n++] = "--x"; args[n++] = edp2_x_s;
+            args[n++] = "--y"; args[n++] = edp2_y_s;
+        } else {
+            args[n++] = "--below"; args[n++] = "eDP-1";
+        }
+        args[n++] = "--scale"; args[n++] = (char *)scale_str;
         if (rotated) {
             args[n++] = "--transform"; args[n++] = (char *)transform;
         }
     }
 
-    /* External output: above eDP-1 when connected (HDMI / TB / USB-C DP) */
+    /* External output: above the eDP stack */
     if (ext_on) {
         args[n++] = "--logical-monitor";
         if (!strcmp(primary, ext_output)) args[n++] = "--primary";
         args[n++] = "--monitor"; args[n++] = (char *)ext_output;
-        args[n++] = "--above";   args[n++] = "eDP-1";
+        if (have_abs_pos) {
+            snprintf(ext_x_s, sizeof(ext_x_s), "%d", ext_x);
+            snprintf(ext_y_s, sizeof(ext_y_s), "%d", ext_y);
+            args[n++] = "--x"; args[n++] = ext_x_s;
+            args[n++] = "--y"; args[n++] = ext_y_s;
+        } else {
+            args[n++] = "--above"; args[n++] = "eDP-1";
+        }
     }
 
     args[n] = NULL;
