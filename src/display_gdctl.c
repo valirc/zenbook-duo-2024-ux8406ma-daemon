@@ -51,7 +51,6 @@
  * left-aligned).
  */
 
-#include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -72,41 +71,6 @@ static display_rotation g_edp_rotation = DISPLAY_ROTATION_NORMAL;
 /* Desired primary output.  Empty string = automatic: HDMI-1 when a cable
  * is physically present, eDP-1 otherwise.  Set by gdctl_set_primary(). */
 static char g_primary_output[64] = "";
-
-/* ---- DRM card detection ------------------------------------------ */
-
-/*
- * Return the DRM card name (e.g. "card0") that owns the eDP-1 connector.
- * Result is cached on first call. Falls back to "card0" if detection
- * fails — correct for xe driver (Meteor Lake Arc, UX8406MA).
- */
-static const char *get_drm_card(void)
-{
-    static char card[16] = {0};
-    if (card[0]) return card;
-
-    DIR *d = opendir("/sys/class/drm");
-    if (d) {
-        struct dirent *e;
-        while ((e = readdir(d)) != NULL) {
-            if (strncmp(e->d_name, "card", 4) != 0) continue;
-            const char *dash = strchr(e->d_name + 4, '-');
-            if (!dash) continue;
-            if (strcmp(dash + 1, "eDP-1") == 0) {
-                size_t len = (size_t)(dash - e->d_name);
-                if (len < sizeof(card)) {
-                    memcpy(card, e->d_name, len);
-                    card[len] = '\0';
-                }
-                break;
-            }
-        }
-        closedir(d);
-    }
-    if (!card[0])
-        strncpy(card, "card0", sizeof(card) - 1);
-    return card;
-}
 
 /* ---- helpers ----------------------------------------------------- */
 
@@ -142,7 +106,7 @@ static int drm_connector_connected(const char *drm_name)
 {
     if (!drm_name) return 0;
     char path[256];
-    snprintf(path, sizeof(path), "/sys/class/drm/%s-%s/status", get_drm_card(), drm_name);
+    snprintf(path, sizeof(path), "/sys/class/drm/%s-%s/status", display_get_drm_card(), drm_name);
     FILE *fp = fopen(path, "r");
     if (!fp) return 0;
     char buf[16] = {0};
@@ -189,7 +153,7 @@ static int drm_preferred_mode(const char *gdctl_name, int *w, int *h)
     const char *drm_name = gdctl_name_to_drm(gdctl_name);
     char path[256];
     snprintf(path, sizeof(path), "/sys/class/drm/%s-%s/modes",
-             get_drm_card(), drm_name);
+             display_get_drm_card(), drm_name);
     FILE *fp = fopen(path, "r");
     if (!fp) return 0;
     char line[32] = {0};
@@ -591,7 +555,7 @@ static int gdctl_is_output_on(const char *output)
     /* Translate gdctl connector name to DRM sysfs name (HDMI-1 → HDMI-A-1). */
     const char *drm = gdctl_name_to_drm(output);
     char path[512];
-    snprintf(path, sizeof(path), "/sys/class/drm/%s-%s/enabled", get_drm_card(), drm);
+    snprintf(path, sizeof(path), "/sys/class/drm/%s-%s/enabled", display_get_drm_card(), drm);
     FILE *fp = fopen(path, "r");
     if (!fp) return 0;
     char buf[16] = {0};

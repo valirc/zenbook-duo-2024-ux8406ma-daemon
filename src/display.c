@@ -14,6 +14,7 @@
  * gracefully instead of crashing.
  */
 
+#include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,6 +23,38 @@
 #include "comun.h"
 #include "display.h"
 #include "display_backend.h"
+
+/* ---- DRM card detection (shared by backends) --------------------- */
+
+const char *display_get_drm_card(void)
+{
+    static char card[16] = {0};
+    if (card[0]) return card;
+
+    DIR *d = opendir("/sys/class/drm");
+    if (d) {
+        struct dirent *e;
+        while ((e = readdir(d)) != NULL) {
+            if (strncmp(e->d_name, "card", 4) != 0) continue;
+            const char *dash = strchr(e->d_name + 4, '-');
+            if (!dash) continue;
+            if (strcmp(dash + 1, "eDP-1") == 0) {
+                size_t len = (size_t)(dash - e->d_name);
+                if (len < sizeof(card)) {
+                    memcpy(card, e->d_name, len);
+                    card[len] = '\0';
+                }
+                break;
+            }
+        }
+        closedir(d);
+    }
+    if (!card[0])
+        strncpy(card, "card0", sizeof(card) - 1);
+    return card;
+}
+
+/* ---- backend registry -------------------------------------------- */
 
 #define MAX_BACKENDS 8
 

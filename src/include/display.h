@@ -97,4 +97,11 @@ const char *display_get_primary(void);
  */
 int display_is_output_connected(const char *output);
 
+/*
+ * Return the DRM card name (e.g. "card0") that owns the eDP-1 connector.
+ * Result is cached on first call; falls back to "card0" if auto-detection
+ * fails.  Available to backend implementations.
+ */
+const char *display_get_drm_card(void);
+
 #endif /* ZBD_DISPLAY_H */

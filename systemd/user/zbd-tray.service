@@ -2,17 +2,15 @@
 #
 # This is a user unit (loaded by `systemctl --user`) that runs in
 # the user's graphical session. It owns:
-#   - the GTK tray icon (libayatana-appindicator),
+#   - the GLib tray icon (libayatana-appindicator-glib, no GTK),
 #   - the Bluetooth connection monitor (bluetoothctl --monitor),
 #   - the udev USB monitor on the configured port path,
 #   - the iio-sensor-proxy orientation monitor,
-#   - the wallpaper and display reconfiguration calls (which talk
-#     to the user's compositor over the user D-Bus session).
+#   - the wallpaper and display reconfiguration calls (gsettings +
+#     gdctl/xrandr talking to the compositor over the session D-Bus).
 #
 # It does NOT need root: brightness/battery/DMIC happen in the
-# system service zbd-system.service. A future commit will introduce
-# a polkit policy + D-Bus IPC so the tray can ask zbd-system to
-# change the brightness on the fly without dropping privileges.
+# system service zbd-system.service via D-Bus + polkit.
 
 [Unit]
 Description=zbd-tray: Zenbook Duo session monitors and tray icon
@@ -29,12 +27,11 @@ Restart=on-failure
 RestartSec=3s
 
 # Hardening for the user binary. It calls into:
-#   - libayatana-appindicator + gtk3 (user X11/Wayland),
-#   - libusb (HID for the keyboard backlight - only over D-Bus to
-#     the system service in the final design; for now over libusb
-#     directly when the user runs the tray as root, which is rare),
+#   - libayatana-appindicator-glib (pure GLib, no GTK/X11),
+#   - libusb (keyboard backlight via D-Bus to zbd-system, or directly
+#     when running as root for debugging),
 #   - libudev netlink monitor,
-#   - subprocesses: bluetoothctl, feh, xrandr/gdctl, pactl.
+#   - subprocesses: bluetoothctl, gsettings, gdctl/xrandr, pactl.
 #
 # We restrict only what the user binary genuinely does not need;
 # the UI stack reads many directories so ProtectSystem must stay at

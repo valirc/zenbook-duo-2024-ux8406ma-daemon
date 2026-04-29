@@ -1,18 +1,17 @@
 /*
  * display_xrandr.c — X11 backend for the display API.
  *
- * Drives the compositor through the xrandr(1) CLI. Works on any X11
- * session (the historical environment for this daemon) and, in
- * principle, also on Wayland with XWayland — but Mutter ignores
- * xrandr reconfiguration on a real Wayland session, so the
- * autodetector in display.c only picks this backend for X11.
+ * Drives the compositor through the xrandr(1) CLI. Only selected when
+ * XDG_SESSION_TYPE=x11; on Wayland/GNOME the gdctl backend is chosen
+ * instead (Mutter silently ignores xrandr reconfiguration from XWayland).
  *
- * is_output_on() reads /sys/class/drm/card1-<output>/enabled directly
- * instead of parsing xrandr output. The DRM card index is hard-coded
- * to card1 because that is what the UX8406MA exposes; a future commit
- * may make this configurable.
+ * is_output_on() reads /sys/class/drm/<card>-<output>/enabled directly
+ * rather than parsing xrandr output. The DRM card name is auto-detected
+ * via display_get_drm_card() — no hardcoded card index.
  *
- * Wallpapers are set via feh(1).
+ * Wallpapers are set via gsettings (org.gnome.desktop.background), the
+ * same mechanism used by the gdctl backend.  This works for GNOME on
+ * X11 and removes the feh/XWayland dependency entirely.
  */
 
 #include <errno.h>
@@ -42,8 +41,6 @@ static const char *rotation_to_xrandr(display_rotation r)
 
 static int xrandr_probe(void)
 {
-    /* Accept whenever the binary exists. The autodetector in
-     * display.c handles the X11-vs-Wayland distinction. */
     return access("/usr/bin/xrandr", X_OK) == 0;
 }
 
@@ -85,7 +82,8 @@ static int xrandr_is_output_on(const char *output)
     if (!output) return 0;
 
     char path[512];
-    snprintf(path, sizeof(path), "/sys/class/drm/card1-%s/enabled", output);
+    snprintf(path, sizeof(path), "/sys/class/drm/%s-%s/enabled",
+             display_get_drm_card(), output);
 
     FILE *fp = fopen(path, "r");
     if (!fp) return 0;
@@ -93,9 +91,7 @@ static int xrandr_is_output_on(const char *output)
     char buf[16] = {0};
     int on = 0;
     if (fgets(buf, sizeof(buf), fp))
-    {
         on = !strcmp(buf, "enabled\n");
-    }
     fclose(fp);
     return on;
 }
@@ -114,18 +110,30 @@ static int xrandr_set_rotation(const char *output, display_rotation r)
 
 static int xrandr_set_wallpapers(const char *bg1, const char *bg2)
 {
+    /* Set via gsettings — works for GNOME on X11, no XWayland or feh needed.
+     * bg2 is ignored: GNOME has no native per-output wallpaper API. */
     if (!bg1) { errno = EINVAL; return -1; }
-    if (bg2)
-    {
-        char *const args[] = {
-            "feh", "--bg-scale", (char *)bg1, "--bg-scale", (char *)bg2, NULL
-        };
-        return exec_cmd_argv("feh", args);
-    }
-    char *const args[] = {
-        "feh", "--bg-scale", (char *)bg1, NULL
+    (void)bg2;
+
+    if (bg1[0] != '/') { errno = EINVAL; return -1; }
+    char uri[4096];
+    int n = snprintf(uri, sizeof(uri), "file://%s", bg1);
+    if (n <= 0 || (size_t)n >= sizeof(uri)) { errno = ENAMETOOLONG; return -1; }
+
+    char *const args_light[] = {
+        "gsettings", "set",
+        "org.gnome.desktop.background", "picture-uri",
+        uri, NULL
     };
-    return exec_cmd_argv("feh", args);
+    int r = exec_cmd_argv("gsettings", args_light);
+    if (r != 0) return r;
+
+    char *const args_dark[] = {
+        "gsettings", "set",
+        "org.gnome.desktop.background", "picture-uri-dark",
+        uri, NULL
+    };
+    return exec_cmd_argv("gsettings", args_dark);
 }
 
 /* ---- registration ------------------------------------------------ */
