@@ -98,6 +98,11 @@ int zbd_ipc_client_set_battery_threshold(int level)
     return call_method_with_int_arg("SetBatteryThreshold", level);
 }
 
+int zbd_ipc_client_set_screenpad_brightness(int level)
+{
+    return call_method_with_int_arg("SetScreenpadBrightness", level);
+}
+
 int zbd_ipc_client_configure_dmic(void)
 {
     return call_method_no_args("ConfigureDmic");

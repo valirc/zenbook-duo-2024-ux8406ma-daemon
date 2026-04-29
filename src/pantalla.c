@@ -33,7 +33,8 @@
 #include "teclado.h"
 #include "display.h"
 
-#define BACKLIGHT_PATH "/sys/class/backlight/intel_backlight/brightness"
+#define BACKLIGHT_PATH   "/sys/class/backlight/intel_backlight/brightness"
+#define SCREENPAD_PATH   "/sys/class/backlight/asus_screenpad/brightness"
 
 int set_pantalla_brillo(int nivel_brillo)
 {
@@ -78,6 +79,32 @@ int set_pantalla_brillo(int nivel_brillo)
     return EXIT_SUCCESS;
 }
 
+/*
+ * set_screenpad_brillo — escribe el brillo del ScreenPad Plus en sysfs.
+ *
+ * Rango: [0, 235]. Con valor 0 la pantalla secundaria queda apagada a
+ * nivel hardware y se eliminan los WMI notify 0xEB/0xEC que de otro modo
+ * llegan cada ~1 s desde el firmware ASUS.  Llamada best-effort: falla
+ * silenciosamente si el dispositivo no existe o el proceso no tiene
+ * privilegios (zbd-tray corre como usuario; zbd-system corre como root).
+ */
+int set_screenpad_brillo(int valor)
+{
+    int fd = open(SCREENPAD_PATH, O_WRONLY | O_CLOEXEC);
+    if (fd < 0)
+        return -1;
+    char buf[16];
+    int len = snprintf(buf, sizeof(buf), "%d\n", valor);
+    ssize_t w = write(fd, buf, (size_t)len);
+    int saved = errno;
+    close(fd);
+    if (w != len) {
+        errno = saved;
+        return -1;
+    }
+    return 0;
+}
+
 void configurar_monitores(const char *accion)
 {
     if (!accion)
@@ -97,6 +124,10 @@ void configurar_monitores(const char *accion)
             fprintf(stderr, "configurar_monitores(encender): backend fallo\n");
             return;
         }
+        /* Restaurar brillo del ScreenPad (apagado por defecto al boot). */
+        int sp = cfg->pantalla_nivel_brillo * 235 / 100;
+        if (sp < 10) sp = 10;
+        set_screenpad_brillo(sp);
     }
     else if (strcmp(accion, "apagar") == 0)
     {
@@ -107,6 +138,9 @@ void configurar_monitores(const char *accion)
             fprintf(stderr, "configurar_monitores(apagar): backend fallo\n");
             return;
         }
+        /* Apagar el ScreenPad a nivel hardware para detener los WMI notify
+         * 0xEB/0xEC que el firmware ASUS genera cuando el panel esta activo. */
+        set_screenpad_brillo(0);
     }
     else
     {

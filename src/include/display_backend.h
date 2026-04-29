@@ -44,6 +44,17 @@ struct display_backend
     int (*is_output_on)(const char *output);
     int (*set_rotation)(const char *output, display_rotation r);
     int (*set_wallpapers)(const char *bg1, const char *bg2);
+
+    /* Primary monitor management.
+     * set_primary: persist `output` as the desired primary and rebuild the
+     *              full layout immediately.  Passing NULL resets to auto.
+     * get_primary: returns the name of the currently effective primary
+     *              (never NULL — falls back to "eDP-1" if undetermined).
+     * is_output_connected: 1 if a cable is physically present on `output`
+     *              (DRM sysfs status == "connected"), 0 otherwise. */
+    int         (*set_primary)(const char *output);
+    const char *(*get_primary)(void);
+    int         (*is_output_connected)(const char *output);
 };
 
 /*

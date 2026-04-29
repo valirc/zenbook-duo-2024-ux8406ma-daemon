@@ -26,6 +26,12 @@ BusName=org.anexa.zbd1
 ExecStart=/usr/local/sbin/zbd-system service
 Restart=on-failure
 RestartSec=3s
+# pactl (used for DMIC setup) needs XDG_RUNTIME_DIR to locate the
+# PipeWire socket at /run/user/0/pulse/native. PULSE_RUNTIME_PATH
+# stops libpulse from trying to create ~/.config/pulse (read-only
+# under ProtectSystem=strict).
+Environment=XDG_RUNTIME_DIR=/run/user/0
+Environment=PULSE_RUNTIME_PATH=/run/user/0/pulse
 
 # === Hardening =============================================================
 # zbd-system writes a tiny set of paths and runs a tiny set of
@@ -40,6 +46,12 @@ AmbientCapabilities=CAP_SYS_ADMIN
 # Filesystem
 ProtectSystem=strict
 ReadWritePaths=/sys/class/backlight /sys/class/power_supply
+# Bind the user runtime directory into the service's private mount
+# namespace so that pactl can reach the PipeWire socket when
+# ConfigureDmic is invoked via D-Bus after the user session is up.
+# The directory may not exist at service start (user not logged in
+# yet); BindPaths= handles missing sources gracefully.
+BindPaths=/run/user/0
 ProtectHome=yes
 PrivateTmp=yes
 # libusb enumera y abre dispositivos USB a traves de /dev/bus/usb/<bus>/<dev>.

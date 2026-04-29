@@ -191,3 +191,28 @@ int display_set_wallpapers(const char *bg1, const char *bg2)
     }
     return active->set_wallpapers(bg1, bg2);
 }
+
+int display_set_primary(const char *output)
+{
+    REQUIRE_ACTIVE_OR_ERR();
+    if (!active->set_primary)
+    {
+        errno = ENOSYS;
+        return -1;
+    }
+    return active->set_primary(output);
+}
+
+const char *display_get_primary(void)
+{
+    if (!active || !active->get_primary)
+        return "eDP-1";
+    return active->get_primary();
+}
+
+int display_is_output_connected(const char *output)
+{
+    if (!active || !active->is_output_connected)
+        return 0;
+    return active->is_output_connected(output);
+}

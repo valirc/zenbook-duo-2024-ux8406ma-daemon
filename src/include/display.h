@@ -78,4 +78,23 @@ int display_set_rotation(const char *output, display_rotation r);
  */
 int display_set_wallpapers(const char *bg1, const char *bg2);
 
+/*
+ * Set `output` as the primary monitor and rebuild the layout immediately.
+ * Passing NULL resets to automatic selection (HDMI-1 if connected, else
+ * eDP-1).  Returns 0 on success.
+ */
+int display_set_primary(const char *output);
+
+/*
+ * Return the name of the currently effective primary monitor.
+ * Never returns NULL.  Caller must not free the returned pointer.
+ */
+const char *display_get_primary(void);
+
+/*
+ * Return 1 if a cable is physically present on `output` (DRM sysfs
+ * status == "connected"), 0 otherwise or on error.
+ */
+int display_is_output_connected(const char *output);
+
 #endif /* ZBD_DISPLAY_H */

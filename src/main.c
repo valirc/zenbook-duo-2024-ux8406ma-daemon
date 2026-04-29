@@ -125,30 +125,29 @@ int main(int argc, char *argv[])
          * sistema en el estado deseado sin necesidad de un servicio
          * oneshot adicional. */
         fprintf(stderr,
-                "Aplicando defaults: brillo=%d, teclado=%d, bateria=%d\n",
+                "Aplicando defaults: brillo=%d, teclado=%d, bateria=%d "
+                "(audio mic=%d%% altavoces=%d%% aplicado por zbd-tray)\n",
                 cfg->pantalla_nivel_brillo,
                 cfg->teclado_nivel_brillo,
-                cfg->bateria_carga_maxima);
+                cfg->bateria_carga_maxima,
+                cfg->audio_volumen_microfono,
+                cfg->audio_volumen_altavoces);
         set_pantalla_brillo(cfg->pantalla_nivel_brillo);
         set_brillo_teclado(cfg->teclado_nivel_brillo);
+        /* Apagar ScreenPad Plus al boot: evita WMI notify 0xEB/0xEC continuos
+         * que el firmware genera cuando el panel esta activo sin que el daemon
+         * haya podido arrancar la sesion grafica todavia. */
+        set_screenpad_brillo(0);
         if (cfg->bateria_carga_maxima > 0)
         {
             limitar_carga_bateria(cfg->bateria_carga_maxima);
         }
 
-        /* DMIC: best-effort. El servicio puede arrancar antes de que
-         * PulseAudio/PipeWire este disponible (zbd-system.service no
-         * ordena After=user@0.service para no bloquear el boot). Si
-         * pactl no responde, configurar_dmic_raw() ya logea un
-         * warning claro y retorna EXIT_FAILURE; nosotros lo tratamos
-         * como advertencia y seguimos al event loop, donde el tray
-         * o un cliente D-Bus podran pedir ConfigureDmic mas tarde. */
-        if (configurar_dmic_raw() != EXIT_SUCCESS)
-        {
-            fprintf(stderr,
-                    "service: DMIC no se ha podido configurar al boot; "
-                    "el cliente puede invocar ConfigureDmic mas tarde via D-Bus.\n");
-        }
+        /* Audio no se configura desde zbd-system: PipeWire es un servicio
+         * de sesion de usuario y jamas es accesible desde un system service,
+         * independientemente del timing. La configuracion de volumen la aplica
+         * zbd-tray al arrancar la sesion grafica (ConfigureDmic D-Bus disponible
+         * para invocacion explicita posterior). */
 
         return zbd_ipc_server_run() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }

@@ -1,48 +1,63 @@
 /*
- * audio.c — load and route the Intel SST DMIC raw source.
+ * audio.c — configure initial audio levels.
  *
- * Wraps the four pactl invocations the user wants every time the
- * daemon boots:
- *   1. load-module module-alsa-source device=hw:0,6 ... dmic_raw
- *   2. set-default-source dmic_raw
- *   3. set-source-volume  @DEFAULT_SOURCE@ 70%
- *   4. set-source-mute    @DEFAULT_SOURCE@ false
+ * On Ubuntu 26.04 (PipeWire + WirePlumber + sof-hda-dsp driver) audio
+ * devices are auto-discovered by WirePlumber; no module loading is
+ * needed. This module only applies the initial volume/mute state from
+ * the configuration file.
  *
- * pactl talks to the PulseAudio / PipeWire instance reachable from
- * the current process: it uses XDG_RUNTIME_DIR to find the socket.
- * In this deployment the daemon runs as root, the user's graphical
- * session is also root, and therefore pactl reaches the same PA.
+ * Volume values from cfg (0..100):
+ *   audio_volumen_microfono — applied to @DEFAULT_SOURCE@. 0 = mute.
+ *   audio_volumen_altavoces — applied to @DEFAULT_SINK@.   0 = mute.
  *
- * That said, the daemon may start *before* PulseAudio is up
- * (zbd-system.service is a `Type=dbus` unit that only orders
- * After=dbus.service, not the audio stack). The very first
- * `pactl load-module` attempt at service boot can therefore fail
- * with "Connection failure: Connection refused". The function
- * still returns EXIT_FAILURE in that case so the caller can decide
- * what to do; main.c's service-boot path treats that as best-effort
- * and does NOT abort the daemon.
+ * WirePlumber selects the best source/sink automatically (DMIC when
+ * no external mic, headset when plugged in; HDMI output or headphones
+ * similarly), so @DEFAULT_SOURCE@ / @DEFAULT_SINK@ are always correct.
+ *
+ * zbd-system.service starts before the audio stack; the first call at
+ * boot will fail and the caller logs a warning without aborting.
+ * zbd-tray retries at session start when PipeWire is up.
  */
 
-#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
+#include <string.h>
 #include "audio.h"
+#include "comun.h"
 #include "exec.h"
-
-#define DMIC_DEVICE      "device=hw:0,6"
-#define DMIC_SOURCE_NAME "source_name=dmic_raw"
-#define DMIC_CHANNELS    "channels=2"
-#define DMIC_FORMAT      "format=s16le"
 
 static int pactl_server_reachable(void)
 {
-    /* `pactl info` returns 0 when it can connect to the daemon and
-     * non-zero otherwise. We call it once before the load-module so
-     * we can produce a clearer diagnostic than pactl's default. */
     char *const args[] = { "pactl", "info", NULL };
-    int rc = exec_cmd_argv("pactl", args);
-    return rc == 0;
+    return exec_cmd_argv("pactl", args) == 0;
+}
+
+/* Apply volume + mute to a capture source or playback sink.
+ * set_vol / set_mute are the pactl subcommands, e.g.:
+ *   "set-source-volume" / "set-source-mute"
+ *   "set-sink-volume"   / "set-sink-mute"
+ */
+static int apply_audio_level(const char *target, int level,
+                             const char *set_vol, const char *set_mute)
+{
+    char vol_str[8];
+    snprintf(vol_str, sizeof(vol_str), "%d%%", level);
+
+    char *const vol_args[] = {
+        "pactl", (char *)set_vol, (char *)target, vol_str, NULL
+    };
+    if (exec_cmd_argv("pactl", vol_args) != 0)
+    {
+        fprintf(stderr, "configurar_audio: %s %s fallo\n", set_vol, target);
+        return -1;
+    }
+
+    const char *mute_val = (level == 0) ? "true" : "false";
+    char *const mute_args[] = {
+        "pactl", (char *)set_mute, (char *)target, (char *)mute_val, NULL
+    };
+    exec_cmd_argv("pactl", mute_args);
+    return 0;
 }
 
 int configurar_dmic_raw(void)
@@ -50,39 +65,25 @@ int configurar_dmic_raw(void)
     if (!pactl_server_reachable())
     {
         fprintf(stderr,
-                "configurar_dmic_raw: PulseAudio/PipeWire no responde en "
-                "XDG_RUNTIME_DIR=%s; saltando configuracion DMIC.\n",
+                "configurar_audio: PipeWire no responde "
+                "(XDG_RUNTIME_DIR=%s); saltando configuracion de audio.\n",
                 getenv("XDG_RUNTIME_DIR") ? getenv("XDG_RUNTIME_DIR") : "(unset)");
         return EXIT_FAILURE;
     }
 
-    /* Cargar el module-alsa-source apuntando al DMIC del Intel SST. */
-    char *const args_load[] = {
-        "pactl", "load-module", "module-alsa-source",
-        DMIC_DEVICE, DMIC_SOURCE_NAME, DMIC_CHANNELS, DMIC_FORMAT,
-        NULL
-    };
-    int ret = exec_cmd_argv("pactl", args_load);
-    if (ret != 0)
+    int mic_vol = cfg ? cfg->audio_volumen_microfono : 70;
+    int spk_vol = cfg ? cfg->audio_volumen_altavoces : 80;
+
+    int ok = 1;
+    if (apply_audio_level("@DEFAULT_SOURCE@", mic_vol,
+                          "set-source-volume", "set-source-mute") != 0) ok = 0;
+    if (apply_audio_level("@DEFAULT_SINK@",   spk_vol,
+                          "set-sink-volume",   "set-sink-mute")   != 0) ok = 0;
+
+    if (!ok)
     {
-        fprintf(stderr, "configurar_dmic_raw: pactl load-module fallo (%d)\n", ret);
+        fprintf(stderr, "configurar_audio: uno o mas ajustes de volumen fallaron\n");
         return EXIT_FAILURE;
     }
-
-    /* PulseAudio/PipeWire pueden tardar un instante en exponer el sink. */
-    sleep(1);
-
-    char *const args_default[] = { "pactl", "set-default-source", "dmic_raw", NULL };
-    char *const args_volume[]  = { "pactl", "set-source-volume",  "@DEFAULT_SOURCE@", "70%", NULL };
-    char *const args_unmute[]  = { "pactl", "set-source-mute",    "@DEFAULT_SOURCE@", "false", NULL };
-
-    if (exec_cmd_argv("pactl", args_default) != 0 ||
-        exec_cmd_argv("pactl", args_volume)  != 0 ||
-        exec_cmd_argv("pactl", args_unmute)  != 0)
-    {
-        fprintf(stderr, "configurar_dmic_raw: ajuste de fuente por defecto fallo\n");
-        return EXIT_FAILURE;
-    }
-
     return EXIT_SUCCESS;
 }

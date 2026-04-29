@@ -25,6 +25,9 @@ struct SConfiguracion
     int   pantalla_nivel_brillo;   /* 10..100, daemon multiplies by 4 */
     int   teclado_nivel_brillo;    /* 0..3 */
     int   bateria_carga_maxima;    /* 20..100 */
+    int   audio_volumen_microfono; /* 0..100; 0 = mute */
+    int   audio_volumen_altavoces; /* 0..100; 0 = mute */
+    char *pantalla_escala;         /* GNOME logical scale factor string, e.g. "1.2"; [1.0, 3.0] */
 };
 
 extern struct SConfiguracion *cfg;

@@ -43,7 +43,7 @@ PREFIX       ?= /usr/local
 BIN_DIR      ?= $(PREFIX)/bin
 SBIN_DIR     ?= $(PREFIX)/sbin
 SYSCONF_DIR  ?= /etc
-ICON_DIR     ?= $(PREFIX)/share/icons/zbd
+ICON_DIR     ?= /usr/share/icons/hicolor/scalable/apps
 WALLPAPER_DIR?= $(PREFIX)/share/backgrounds/zbd
 SYSTEMD_SYS  ?= /usr/lib/systemd/system
 SYSTEMD_USER ?= $(PREFIX)/lib/systemd/user
@@ -147,6 +147,7 @@ install: release
 	@echo "  INSTALL  resources"
 	$(INSTALL) -d $(DESTDIR)$(ICON_DIR)
 	$(INSTALL) -m 0644 icono.svg $(DESTDIR)$(ICON_DIR)/zbd-tray.svg
+	-gtk-update-icon-cache -qtf /usr/share/icons/hicolor 2>/dev/null || true
 	$(INSTALL) -d $(DESTDIR)$(WALLPAPER_DIR)
 	$(INSTALL) -m 0644 fondos/bg_edp1.jpg $(DESTDIR)$(WALLPAPER_DIR)/
 	$(INSTALL) -m 0644 fondos/bg_edp2.jpg $(DESTDIR)$(WALLPAPER_DIR)/
@@ -185,7 +186,7 @@ uninstall:
 	@echo "  UNINSTALL"
 	rm -f  $(DESTDIR)$(SBIN_DIR)/zbd-system
 	rm -f  $(DESTDIR)$(BIN_DIR)/zbd-tray
-	rm -rf $(DESTDIR)$(ICON_DIR)
+	rm -f  $(DESTDIR)$(ICON_DIR)/zbd-tray.svg
 	rm -rf $(DESTDIR)$(WALLPAPER_DIR)
 	rm -f  $(DESTDIR)$(SYSTEMD_SYS)/zbd-system.service
 	rm -f  $(DESTDIR)$(SYSTEMD_USER)/zbd-tray.service

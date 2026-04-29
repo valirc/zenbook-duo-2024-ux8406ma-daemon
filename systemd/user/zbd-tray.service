@@ -24,6 +24,7 @@ Requisite=graphical-session.target
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/zbd-tray
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=3s
 

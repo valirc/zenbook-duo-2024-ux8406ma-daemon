@@ -2,6 +2,7 @@
 #define PANTALLA_H
 
 int set_pantalla_brillo(int nivel_brillo);
+int set_screenpad_brillo(int valor);
 
 void configurar_monitores(const char *accion);
 

@@ -76,6 +76,51 @@ static char *trim(char *s)
     return s;
 }
 
+/* Validate and store a decimal scale value as a string — avoids float↔string
+ * locale issues entirely (strtod/printf use locale decimal separator). */
+static int parse_scale_str(const char *value, float min, float max, char **out, const char *key)
+{
+    if (!value || !*value)
+    {
+        fprintf(stderr, "config: '%s' no puede estar vacio\n", key);
+        return -1;
+    }
+    int dot_seen = 0;
+    for (const char *p = value; *p; ++p)
+    {
+        if (*p == '.') { if (dot_seen++) { goto bad; } }
+        else if (!isdigit((unsigned char)*p)) { goto bad; }
+    }
+    /* Range check using locale-independent integer arithmetic. */
+    {
+        const char *dot = strchr(value, '.');
+        long int_part = strtol(value, NULL, 10);
+        double frac = 0.0;
+        if (dot && *(dot + 1))
+        {
+            const char *fp = dot + 1;
+            long frac_digits = strtol(fp, NULL, 10);
+            double denom = 1.0;
+            for (const char *p = fp; *p; ++p) denom *= 10.0;
+            frac = (double)frac_digits / denom;
+        }
+        double v = (double)int_part + frac;
+        if (v < (double)min || v > (double)max)
+        {
+            fprintf(stderr, "config: '%s' fuera de rango [%.4g, %.4g] (recibido: %s)\n",
+                    key, (double)min, (double)max, value);
+            return -1;
+        }
+    }
+    free(*out);
+    *out = strdup(value);
+    return *out ? 0 : -1;
+
+bad:
+    fprintf(stderr, "config: '%s' debe ser un numero (recibido: '%s')\n", key, value);
+    return -1;
+}
+
 static int parse_int(const char *value, int min, int max, int *out, const char *key)
 {
     char *endp = NULL;
@@ -182,6 +227,7 @@ void cfg_release(void)
     free(cfg->pantalla_tasa_refresco);
     free(cfg->pantalla_fondo_edp1);
     free(cfg->pantalla_fondo_edp2);
+    free(cfg->pantalla_escala);
     free(cfg);
     cfg = NULL;
 }
@@ -223,6 +269,12 @@ int cargar_configuracion_desde(const char *path)
         fprintf(stderr, "config: out of memory\n");
         return -1;
     }
+
+    /* Defaults for optional keys — preserved when the key is absent
+     * from the config file (backward compatibility with older files). */
+    cfg->audio_volumen_microfono = 70;
+    cfg->audio_volumen_altavoces = 80;
+    cfg->pantalla_escala = strdup("1.2");
 
     char line[1024];
     int line_no = 0;
@@ -354,6 +406,27 @@ int cargar_configuracion_desde(const char *path)
                 rc = -1; break;
             }
             cfg->bateria_carga_maxima = n;
+        }
+        else if (!strcmp(key, "audio_volumen_microfono"))
+        {
+            if (parse_int(value, 0, 100, &cfg->audio_volumen_microfono, key) != 0)
+            {
+                rc = -1; break;
+            }
+        }
+        else if (!strcmp(key, "audio_volumen_altavoces"))
+        {
+            if (parse_int(value, 0, 100, &cfg->audio_volumen_altavoces, key) != 0)
+            {
+                rc = -1; break;
+            }
+        }
+        else if (!strcmp(key, "pantalla_escala"))
+        {
+            if (parse_scale_str(value, 1.0f, 3.0f, &cfg->pantalla_escala, key) != 0)
+            {
+                rc = -1; break;
+            }
         }
         else
         {

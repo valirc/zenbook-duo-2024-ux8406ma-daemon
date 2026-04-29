@@ -19,7 +19,8 @@
  *     SetScreenBrightness(i level) -> ()    level in [10..100]
  *     SetKeyboardBacklight(i level) -> ()   level in [0..3]
  *     SetBatteryThreshold(i level) -> ()    level in [20..100]
- *     ConfigureDmic()              -> ()
+ *     SetScreenpadBrightness(i level) -> () level in [0..100] (% → [0..235] raw)
+ *     ConfigureDmic()              -> ()    sets @DEFAULT_SOURCE@ vol=70% unmuted
  *
  * In this deployment both zbd-system (privileged service) and
  * zbd-tray (graphical session) run as root, so pactl invocations
@@ -51,6 +52,7 @@
 int zbd_ipc_client_set_screen_brightness(int level);
 int zbd_ipc_client_set_keyboard_backlight(int level);
 int zbd_ipc_client_set_battery_threshold(int level);
+int zbd_ipc_client_set_screenpad_brightness(int level);
 int zbd_ipc_client_configure_dmic(void);
 
 /*
