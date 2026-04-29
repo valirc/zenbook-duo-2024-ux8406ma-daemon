@@ -1,10 +1,33 @@
-#include <gtk/gtk.h>
-#include <libayatana-appindicator/app-indicator.h>
+/*
+ * gui_daemon.c — zbd-tray: tray icon, monitor threads and config reload.
+ *
+ * Uses libayatana-appindicator-glib (GLib-only reimplementation of the
+ * StatusNotifierItem/AppIndicator protocol) and GIO GMenu/GSimpleAction
+ * instead of GTK3 GtkMenu widgets.  No GTK dependency — pure GLib/GIO.
+ *
+ * Menu model
+ * ──────────
+ * The tray menu is a static GMenu tree wired to a GSimpleActionGroup
+ * (prefix "ind").  Radio-button behaviour is achieved via stateful
+ * GSimpleActions with G_VARIANT_TYPE_STRING: each menu item carries an
+ * action-detail like "ind.brillo-pantalla::20"; when activated the action
+ * receives the target string as its parameter and sets its state to that
+ * value — the tray renderer marks the matching item as checked.
+ *
+ * Thread safety
+ * ─────────────
+ * All GMenu/GAction mutations happen on the GLib main thread via
+ * g_idle_add() / g_timeout_add() callbacks.  The monitor pthreads only
+ * call g_idle_add() to schedule work; they never touch GMenu directly.
+ */
+
+#include <libayatana-appindicator-glib/ayatana-appindicator.h>
 #include <glib-unix.h>
 #include <libudev.h>
 #include <pthread.h>
 #include <sys/select.h>
 #include <time.h>
+
 #include "comun.h"
 #include "exec.h"
 #include "pantalla.h"
@@ -18,47 +41,38 @@
 #include "display.h"
 #include "ipc.h"
 
-static AppIndicator *indicator;
+/* ---- module state --------------------------------------------------- */
+
+static AppIndicator       *indicator;
+static GMainLoop          *g_loop;
+static GSimpleActionGroup *g_actions;
+static GMenu              *g_menu;
+static GMenu              *g_submenu_primario;
+static GSimpleAction      *g_act_pantalla;
+static GSimpleAction      *g_act_teclado;
+static GSimpleAction      *g_act_primary;
+
 static pthread_t hilo_orientacion;
 static pthread_t hilo_bluetooth;
 static pthread_t hilo_usb;
 static pthread_t hilo_drm;
 
-/* Fixed radio items for "Monitor principal" — created once at startup,
- * never destroyed.  The hotplug callback only shows/hides them and updates
- * the active state, so dbusmenu always holds valid widget references. */
-static struct {
-    const char *name;
-    GtkWidget  *item;
-} g_primario_items[] = {
-    { "HDMI-1", NULL }, { "HDMI-2", NULL },
-    { "DP-1",   NULL }, { "DP-2",   NULL }, { "DP-3", NULL },
-    { "eDP-1",  NULL },
-    { NULL,     NULL }
-};
-/* Cached at startup: 1 = the system service is running and we
- * should route privileged calls through D-Bus; 0 = no service, fall
- * back to direct calls (only useful when running zbd-tray as root). */
 static int system_service_available = 0;
 
-static void on_set_pantalla_brillo(GtkMenuItem *item, gpointer user_data)
+/* ---- action callbacks ----------------------------------------------- */
+
+static void on_set_pantalla_brillo(GSimpleAction *act, GVariant *param,
+                                   gpointer data)
 {
-    if (!gtk_check_menu_item_get_active(GTK_CHECK_MENU_ITEM(item)))
-        return; /* fired on deselect — ignore */
-    int nivel = GPOINTER_TO_INT(user_data);
+    (void)data;
+    g_simple_action_set_state(act, param);
+    int nivel = atoi(g_variant_get_string(param, NULL));
     if (system_service_available)
-    {
         zbd_ipc_client_set_screen_brightness(nivel);
-    }
     else
-    {
         set_pantalla_brillo(nivel);
-    }
-    /* Keep cfg in sync so keyboard-attach/detach events restore the right
-     * level, and propagate the new brightness to the ScreenPad if active. */
     cfg->pantalla_nivel_brillo = nivel;
-    if (monitor_estado("eDP-2"))
-    {
+    if (monitor_estado("eDP-2")) {
         int sp = nivel * 235 / 100;
         if (sp < 10) sp = 10;
         if (system_service_available)
@@ -68,181 +82,106 @@ static void on_set_pantalla_brillo(GtkMenuItem *item, gpointer user_data)
     }
 }
 
-
-static void on_set_teclado_brillo(GtkMenuItem *item, gpointer user_data)
+static void on_set_teclado_brillo(GSimpleAction *act, GVariant *param,
+                                  gpointer data)
 {
-    if (!gtk_check_menu_item_get_active(GTK_CHECK_MENU_ITEM(item)))
-        return; /* fired on deselect — ignore */
-    int nivel = GPOINTER_TO_INT(user_data);
+    (void)data;
+    g_simple_action_set_state(act, param);
+    int nivel = atoi(g_variant_get_string(param, NULL));
     if (system_service_available)
-    {
         zbd_ipc_client_set_keyboard_backlight(nivel);
-    }
     else
-    {
         set_brillo_teclado(nivel);
-    }
     cfg->teclado_nivel_brillo = nivel;
 }
 
-static void on_set_primary_monitor(GtkMenuItem *item, gpointer user_data)
+static void on_set_primary_monitor(GSimpleAction *act, GVariant *param,
+                                   gpointer data)
 {
-    if (!gtk_check_menu_item_get_active(GTK_CHECK_MENU_ITEM(item)))
-        return; /* fired on deselect — ignore */
-    const char *output = (const char *)user_data;
-    fprintf(stderr, "zbd-tray: monitor principal → %s\n", output ? output : "(auto)");
+    (void)data;
+    g_simple_action_set_state(act, param);
+    const char *output = g_variant_get_string(param, NULL);
+    fprintf(stderr, "zbd-tray: monitor principal → %s\n", output);
     display_set_primary(output);
-    /* Restore brightness after layout rebuild. */
     set_pantalla_brillo(cfg->pantalla_nivel_brillo);
 }
 
-/* Rebuilds screen-brightness radio items on open so the checked entry
- * always reflects the current cfg->pantalla_nivel_brillo. */
-static void on_submenu_pantalla_map(GtkWidget *submenu, gpointer user_data)
+static void on_quit(GSimpleAction *act, GVariant *param, gpointer data)
 {
-    (void)user_data;
-
-    GList *old = gtk_container_get_children(GTK_CONTAINER(submenu));
-    g_list_foreach(old, (GFunc)gtk_widget_destroy, NULL);
-    g_list_free(old);
-
-    int current = cfg ? cfg->pantalla_nivel_brillo : 0;
-    GSList *group = NULL;
-
-    for (int i = 10; i <= 100; i += 10) {
-        char label[8];
-        snprintf(label, sizeof(label), "%d%%", i);
-        GtkWidget *item = gtk_radio_menu_item_new_with_label(group, label);
-        group = gtk_radio_menu_item_get_group(GTK_RADIO_MENU_ITEM(item));
-        gtk_menu_shell_append(GTK_MENU_SHELL(submenu), item);
-        gtk_widget_show(item);
-        if (i == current)
-            gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(item), TRUE);
-        g_signal_connect(item, "activate",
-                         G_CALLBACK(on_set_pantalla_brillo), GINT_TO_POINTER(i));
-    }
+    (void)act; (void)param; (void)data;
+    g_main_loop_quit(g_loop);
 }
 
-/* Rebuilds keyboard-brightness radio items on open so the checked entry
- * always reflects the current cfg->teclado_nivel_brillo. */
-static void on_submenu_teclado_map(GtkWidget *submenu, gpointer user_data)
+/* ---- primary-monitor submenu (rebuilt on DRM hotplug) --------------- */
+
+/*
+ * Rebuild g_submenu_primario to show only physically-connected outputs
+ * (eDP-1 always visible) and update the checked radio state.
+ * Must be called from the main thread.
+ */
+static void rebuild_primary_submenu(void)
 {
-    (void)user_data;
+    static const char *candidates[] = {
+        "HDMI-1", "HDMI-2", "DP-1", "DP-2", "DP-3", NULL
+    };
 
-    GList *old = gtk_container_get_children(GTK_CONTAINER(submenu));
-    g_list_foreach(old, (GFunc)gtk_widget_destroy, NULL);
-    g_list_free(old);
+    g_menu_remove_all(g_submenu_primario);
 
-    int current = cfg ? cfg->teclado_nivel_brillo : 0;
-    GSList *group = NULL;
-
-    for (int i = 0; i <= 3; i++) {
-        char label[4];
-        snprintf(label, sizeof(label), "%d", i);
-        GtkWidget *item = gtk_radio_menu_item_new_with_label(group, label);
-        group = gtk_radio_menu_item_get_group(GTK_RADIO_MENU_ITEM(item));
-        gtk_menu_shell_append(GTK_MENU_SHELL(submenu), item);
-        gtk_widget_show(item);
-        if (i == current)
-            gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(item), TRUE);
-        g_signal_connect(item, "activate",
-                         G_CALLBACK(on_set_teclado_brillo), GINT_TO_POINTER(i));
-    }
-}
-
-/* Updates the "Monitor principal" submenu in place: shows only connected
- * outputs and marks the current primary as active.  Items are never
- * destroyed — dbusmenu always holds valid widget references. */
-static void on_submenu_primario_map(GtkWidget *submenu, gpointer user_data)
-{
-    (void)submenu;
-    (void)user_data;
-    const char *current = display_get_primary();
-    for (int i = 0; g_primario_items[i].name; i++) {
-        const char *name = g_primario_items[i].name;
-        GtkWidget  *item = g_primario_items[i].item;
-        if (!item) continue;
-        /* Show connected outputs; eDP-1 always visible. */
-        gboolean visible = (!strcmp(name, "eDP-1")
-                         || display_is_output_connected(name));
-        if (visible) gtk_widget_show(item); else gtk_widget_hide(item);
-        /* Activate the current primary without triggering on_set_primary_monitor. */
-        if (current && !strcmp(current, name)
-                && !gtk_check_menu_item_get_active(GTK_CHECK_MENU_ITEM(item))) {
-            g_signal_handlers_block_by_func(
-                item, on_set_primary_monitor, (gpointer)name);
-            gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(item), TRUE);
-            g_signal_handlers_unblock_by_func(
-                item, on_set_primary_monitor, (gpointer)name);
+    for (int i = 0; candidates[i]; i++) {
+        if (display_is_output_connected(candidates[i])) {
+            char action[64];
+            snprintf(action, sizeof(action), "ind.set-primary::%s", candidates[i]);
+            g_menu_append(g_submenu_primario, candidates[i], action);
         }
     }
+    g_menu_append(g_submenu_primario, "eDP-1", "ind.set-primary::eDP-1");
+
+    if (g_act_primary) {
+        const char *cur = display_get_primary();
+        if (!cur) cur = "eDP-1";
+        g_simple_action_set_state(g_act_primary, g_variant_new_string(cur));
+    }
 }
 
-static void on_start_orientacion(void)
-{
-    pthread_create(&hilo_orientacion, NULL, monitorizar_cambios_orientacion, NULL);
-}
+/* ---- signal / reload callbacks -------------------------------------- */
 
-static void on_start_bluetooth(void)
+static gboolean on_shutdown_signal(gpointer data)
 {
-    pthread_create(&hilo_bluetooth, NULL, monitorizar_cambios_bluetooth, NULL);
-}
-
-static void on_start_usb(void)
-{
-    pthread_create(&hilo_usb, NULL, monitorizar_cambios_teclado_usb, NULL);
-}
-
-static void on_quit(GtkMenuItem *item, gpointer user_data)
-{
-    (void)item;
-    (void)user_data;
-    gtk_main_quit();
-}
-
-static gboolean on_shutdown_signal(gpointer user_data)
-{
-    (void)user_data;
-    gtk_main_quit();
+    (void)data;
+    g_main_loop_quit(g_loop);
     return G_SOURCE_REMOVE;
 }
 
-/* SIGHUP handler: re-read /etc/zbd/zbd.conf and re-apply all hardware
- * settings. Monitor threads (orientation, USB, bluetooth) keep running
- * across the reload — they re-read cfg fields on their next event.
- *
- * Note: cargar_configuracion() replaces the global cfg pointer. Monitor
- * threads may briefly see a stale pointer; this is benign in practice
- * (single-user device, infrequent reloads, threads poll on long timeouts).
+/*
+ * SIGHUP: re-read /etc/zbd/zbd.conf and re-apply all hardware settings.
+ * Monitor threads keep running across the reload; they re-read cfg on
+ * their next event.
  */
-static gboolean on_reload_config(gpointer user_data)
+static gboolean on_reload_config(gpointer data)
 {
-    (void)user_data;
+    (void)data;
     fprintf(stderr, "zbd-tray: SIGHUP — recargando configuracion\n");
 
-    if (cargar_configuracion() < 0)
-    {
-        fprintf(stderr, "zbd-tray: reload: cargar_configuracion fallo; se mantiene la config anterior\n");
+    if (cargar_configuracion() < 0) {
+        fprintf(stderr, "zbd-tray: reload: cargar_configuracion fallo; "
+                "se mantiene la config anterior\n");
         return G_SOURCE_CONTINUE;
     }
 
-    fprintf(stderr, "zbd-tray: reload: brillo=%d teclado=%d bateria=%d mic=%d%% altavoces=%d%%\n",
+    fprintf(stderr, "zbd-tray: reload: brillo=%d teclado=%d bateria=%d "
+            "mic=%d%% altavoces=%d%%\n",
             cfg->pantalla_nivel_brillo, cfg->teclado_nivel_brillo,
             cfg->bateria_carga_maxima,
             cfg->audio_volumen_microfono, cfg->audio_volumen_altavoces);
 
-    /* Audio — siempre directo desde la tray (PipeWire es de sesion). */
     configurar_dmic_raw();
 
-    /* Brillo de pantalla. */
     if (system_service_available)
         zbd_ipc_client_set_screen_brightness(cfg->pantalla_nivel_brillo);
     else
         set_pantalla_brillo(cfg->pantalla_nivel_brillo);
 
-    /* ScreenPad: sincronizar si eDP-2 esta activo. */
-    if (monitor_estado("eDP-2"))
-    {
+    if (monitor_estado("eDP-2")) {
         int sp = cfg->pantalla_nivel_brillo * 235 / 100;
         if (sp < 10) sp = 10;
         if (system_service_available)
@@ -251,43 +190,49 @@ static gboolean on_reload_config(gpointer user_data)
             set_screenpad_brillo(sp);
     }
 
-    /* Teclado. */
     if (system_service_available)
         zbd_ipc_client_set_keyboard_backlight(cfg->teclado_nivel_brillo);
     else
         set_brillo_teclado(cfg->teclado_nivel_brillo);
 
-    /* Bateria — solo via D-Bus (escribe sysfs privilegiado). */
     if (system_service_available && cfg->bateria_carga_maxima > 0)
         zbd_ipc_client_set_battery_threshold(cfg->bateria_carga_maxima);
+
+    /* Sync radio-button checked state to the newly loaded values. */
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%d", cfg->pantalla_nivel_brillo);
+    g_simple_action_set_state(g_act_pantalla, g_variant_new_string(buf));
+    snprintf(buf, sizeof(buf), "%d", cfg->teclado_nivel_brillo);
+    g_simple_action_set_state(g_act_teclado, g_variant_new_string(buf));
 
     fprintf(stderr, "zbd-tray: reload: completado\n");
     return G_SOURCE_CONTINUE;
 }
 
+/* ---- DRM hotplug monitor -------------------------------------------- */
+
 static guint g_drm_rebuild_source = 0;
 
-static gboolean on_drm_hotplug(gpointer user_data)
+static gboolean on_drm_hotplug(gpointer data)
 {
-    (void)user_data;
+    (void)data;
     g_drm_rebuild_source = 0;
-    on_submenu_primario_map(NULL, NULL);
+    rebuild_primary_submenu();
     return G_SOURCE_REMOVE;
 }
 
-/* Debounce trampoline — runs in the GLib main loop via g_idle_add.
- * Arms a one-shot 1-second timer; a second call within that window
- * is a no-op so that rapid-fire events collapse into a single rebuild. */
-static gboolean drm_schedule_rebuild(gpointer user_data)
+static gboolean drm_schedule_rebuild(gpointer data)
 {
-    (void)user_data;
+    (void)data;
     if (g_drm_rebuild_source == 0)
         g_drm_rebuild_source = g_timeout_add(1000, on_drm_hotplug, NULL);
     return G_SOURCE_REMOVE;
 }
 
-/* Watches udev for DRM connector hotplug events and schedules a debounced
- * menu rebuild on the GTK main thread. */
+/*
+ * Watches udev for DRM connector hotplug events and schedules a debounced
+ * menu rebuild on the GLib main thread.
+ */
 static void *monitorizar_drm_hotplug(void *arg)
 {
     (void)arg;
@@ -313,10 +258,6 @@ static void *monitorizar_drm_hotplug(void *arg)
             if (dev) {
                 const char *action = udev_device_get_action(dev);
                 if (action && !strcmp(action, "change")) {
-                    /* Rate-limit: the Xe/DRM driver can burst dozens of
-                     * "change" events on a single connect/disconnect.
-                     * Cap g_idle_add calls to one per 500 ms to avoid
-                     * flooding the GLib main loop with idle sources. */
                     struct timespec now;
                     clock_gettime(CLOCK_MONOTONIC, &now);
                     long ms = (now.tv_sec  - last_queued.tv_sec)  * 1000
@@ -335,138 +276,144 @@ static void *monitorizar_drm_hotplug(void *arg)
     return NULL;
 }
 
-static GtkWidget *create_menu(void)
+/* ---- GAction setup -------------------------------------------------- */
+
+static void setup_actions(void)
 {
-    GtkWidget *menu, *item;
-    menu = gtk_menu_new();
+    g_actions = g_simple_action_group_new();
 
-    /* DMIC: siempre directamente desde la tray. pactl habla con el
-     * servidor PipeWire del usuario via XDG_RUNTIME_DIR; el servicio
-     * system corre en un mount namespace distinto y no ve /run/user/0.
-     * Si PipeWire aun no esta listo, configurar_dmic_raw() falla con
-     * un aviso pero no aborta. */
-    configurar_dmic_raw();
-    on_start_orientacion();
+    /* Brillo pantalla: stateful string action (values "10".."100"). */
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%d", cfg ? cfg->pantalla_nivel_brillo : 20);
+    g_act_pantalla = g_simple_action_new_stateful(
+        "brillo-pantalla", G_VARIANT_TYPE_STRING, g_variant_new_string(buf));
+    g_signal_connect(g_act_pantalla, "activate",
+                     G_CALLBACK(on_set_pantalla_brillo), NULL);
+    g_simple_action_group_insert(g_actions, G_ACTION(g_act_pantalla));
 
-    /* Solo un monitor del teclado a la vez: Bluetooth o USB, segun la
-     * configuracion. Lanzar ambos provoca que se pisen al cambiar el
-     * estado de eDP-2. */
-    if (cfg->modo_deteccion && !strcmp(cfg->modo_deteccion, "bluetooth"))
-    {
-        on_start_bluetooth();
-    }
-    else if (cfg->modo_deteccion && !strcmp(cfg->modo_deteccion, "udev"))
-    {
-        on_start_usb();
-    }
-    else
-    {
-        g_warning("modo_deteccion invalido o ausente ('%s'); el monitor "
-                  "del teclado no se inicia.",
-                  cfg->modo_deteccion ? cfg->modo_deteccion : "");
-    }
+    /* Brillo teclado: stateful string action (values "0".."3"). */
+    snprintf(buf, sizeof(buf), "%d", cfg ? cfg->teclado_nivel_brillo : 1);
+    g_act_teclado = g_simple_action_new_stateful(
+        "brillo-teclado", G_VARIANT_TYPE_STRING, g_variant_new_string(buf));
+    g_signal_connect(g_act_teclado, "activate",
+                     G_CALLBACK(on_set_teclado_brillo), NULL);
+    g_simple_action_group_insert(g_actions, G_ACTION(g_act_teclado));
 
-    // Submenú brillo de pantalla (eDP-1): rango válido 10-100
-    // Pre-populated at creation so GTK sees items at show_all time (empty
-    // submenus are treated as leaf nodes and close the menu on click).
-    // map signal refreshes the checked entry each time the submenu opens.
-    GtkWidget *submenu_pantalla = gtk_menu_new();
-    on_submenu_pantalla_map(submenu_pantalla, NULL);
-    g_signal_connect(submenu_pantalla, "map",
-                     G_CALLBACK(on_submenu_pantalla_map), NULL);
-    GtkWidget *pantalla_menu = gtk_menu_item_new_with_label("Brillo pantalla");
-    gtk_menu_item_set_submenu(GTK_MENU_ITEM(pantalla_menu), submenu_pantalla);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), pantalla_menu);
+    /* Monitor principal: stateful string action (connector names). */
+    const char *prim = display_get_primary();
+    if (!prim) prim = "eDP-1";
+    g_act_primary = g_simple_action_new_stateful(
+        "set-primary", G_VARIANT_TYPE_STRING, g_variant_new_string(prim));
+    g_signal_connect(g_act_primary, "activate",
+                     G_CALLBACK(on_set_primary_monitor), NULL);
+    g_simple_action_group_insert(g_actions, G_ACTION(g_act_primary));
 
-    // Submenú brillo de teclado (0-3) — same pre-populate + map pattern.
-    GtkWidget *submenu_teclado = gtk_menu_new();
-    on_submenu_teclado_map(submenu_teclado, NULL);
-    g_signal_connect(submenu_teclado, "map",
-                     G_CALLBACK(on_submenu_teclado_map), NULL);
-    GtkWidget *teclado_menu = gtk_menu_item_new_with_label("Brillo teclado");
-    gtk_menu_item_set_submenu(GTK_MENU_ITEM(teclado_menu), submenu_teclado);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), teclado_menu);
-
-    // Submenú monitor principal — ítems fijos creados una sola vez.
-    // La señal map no refire con AppIndicator/dbusmenu; el hilo DRM llama
-    // on_submenu_primario_map para actualizar visibilidad y estado active.
-    GtkWidget *submenu_primario = gtk_menu_new();
-    {
-        GSList *grp = NULL;
-        for (int i = 0; g_primario_items[i].name; i++) {
-            GtkWidget *it = gtk_radio_menu_item_new_with_label(
-                                grp, g_primario_items[i].name);
-            g_primario_items[i].item = it;
-            grp = gtk_radio_menu_item_get_group(GTK_RADIO_MENU_ITEM(it));
-            /* Prevent gtk_widget_show_all from overriding hide() calls. */
-            gtk_widget_set_no_show_all(it, TRUE);
-            gtk_menu_shell_append(GTK_MENU_SHELL(submenu_primario), it);
-            g_signal_connect(it, "activate",
-                             G_CALLBACK(on_set_primary_monitor),
-                             (gpointer)g_primario_items[i].name);
-        }
-    }
-    on_submenu_primario_map(submenu_primario, NULL);
-    GtkWidget *primario_menu = gtk_menu_item_new_with_label("Monitor principal");
-    gtk_menu_item_set_submenu(GTK_MENU_ITEM(primario_menu), submenu_primario);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), primario_menu);
-
-    item = gtk_separator_menu_item_new();
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
-
-    item = gtk_menu_item_new_with_label("Salir");
-    g_signal_connect(item, "activate", G_CALLBACK(on_quit), NULL);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
-
-    gtk_widget_show_all(menu);
-    return menu;
+    /* Salir: simple non-stateful action. */
+    GSimpleAction *quit = g_simple_action_new("quit", NULL);
+    g_signal_connect(quit, "activate", G_CALLBACK(on_quit), NULL);
+    g_simple_action_group_insert(g_actions, G_ACTION(quit));
+    g_object_unref(quit);
 }
+
+/* ---- GMenu construction --------------------------------------------- */
+
+static void build_menu(void)
+{
+    g_menu = g_menu_new();
+
+    /* Brillo pantalla: 10%..100% radio group. */
+    GMenu *sub_p = g_menu_new();
+    for (int i = 10; i <= 100; i += 10) {
+        char label[8], action[48];
+        snprintf(label,  sizeof(label),  "%d%%", i);
+        snprintf(action, sizeof(action), "ind.brillo-pantalla::%d", i);
+        g_menu_append(sub_p, label, action);
+    }
+    g_menu_append_submenu(g_menu, "Brillo pantalla", G_MENU_MODEL(sub_p));
+    g_object_unref(sub_p);
+
+    /* Brillo teclado: 0..3 radio group. */
+    GMenu *sub_t = g_menu_new();
+    for (int i = 0; i <= 3; i++) {
+        char label[4], action[40];
+        snprintf(label,  sizeof(label),  "%d", i);
+        snprintf(action, sizeof(action), "ind.brillo-teclado::%d", i);
+        g_menu_append(sub_t, label, action);
+    }
+    g_menu_append_submenu(g_menu, "Brillo teclado", G_MENU_MODEL(sub_t));
+    g_object_unref(sub_t);
+
+    /* Monitor principal: dynamic items populated by rebuild_primary_submenu(). */
+    g_submenu_primario = g_menu_new();
+    rebuild_primary_submenu();
+    g_menu_append_submenu(g_menu, "Monitor principal",
+                          G_MENU_MODEL(g_submenu_primario));
+
+    /* Separator + Salir in their own section. */
+    GMenu *sec = g_menu_new();
+    g_menu_append(sec, "Salir", "ind.quit");
+    g_menu_append_section(g_menu, NULL, G_MENU_MODEL(sec));
+    g_object_unref(sec);
+}
+
+/* ---- entry point ---------------------------------------------------- */
 
 int main(int argc, char **argv)
 {
-    gtk_init(&argc, &argv);
+    (void)argc; (void)argv;
 
     if (zbd_install_signal_handlers() != 0)
-    {
         return 1;
-    }
 
-    if (cargar_configuracion() < 0) {
+    if (cargar_configuracion() < 0)
         return 1;
-    }
 
     if (display_init() < 0) {
         fprintf(stderr, "display: ningun backend disponible; abortando.\n");
         return 1;
     }
 
-    /* Detectar si el servicio system D-Bus esta corriendo. Si lo esta,
-     * la tray rutea las operaciones privilegiadas a traves de D-Bus.
-     * Si no, ejecuta directamente (solo util cuando zbd-tray se lanza
-     * como root para depuracion). */
     system_service_available = zbd_ipc_client_is_service_available();
     fprintf(stderr, "ipc: zbd-system %s en el bus\n",
-            system_service_available ? "presente" : "ausente; usando llamadas directas");
+            system_service_available ? "presente"
+                                     : "ausente; usando llamadas directas");
+
+    g_loop = g_main_loop_new(NULL, FALSE);
+
+    setup_actions();
+    build_menu();
 
     /* Icon registered in /usr/share/icons/hicolor/scalable/apps/ by make
-     * install. GNOME Shell resolves it by name via the hicolor theme, which
-     * is the correct freedesktop approach. Using an absolute path here would
-     * fail with GNOME Shell's AppIndicator extension because the shell looks
-     * up icons by name in the theme, not from arbitrary file paths. */
-    const gchar *icon_name = "zbd-tray";
-
-    indicator = app_indicator_new("zbd-indicator", icon_name, APP_INDICATOR_CATEGORY_APPLICATION_STATUS);
+     * install. The tray extension resolves it by name from the hicolor theme. */
+    indicator = app_indicator_new("zbd-indicator", "zbd-tray",
+                                  APP_INDICATOR_CATEGORY_HARDWARE);
     app_indicator_set_status(indicator, APP_INDICATOR_STATUS_ACTIVE);
-    app_indicator_set_icon_full(indicator, icon_name, "ZBD Tray");
+    app_indicator_set_icon(indicator, "zbd-tray", "ZBD Tray");
+    app_indicator_set_menu(indicator, g_menu);
+    app_indicator_set_actions(indicator, g_actions);
 
-    GtkWidget *menu = create_menu();
-    app_indicator_set_menu(indicator, GTK_MENU(menu));
-    pthread_create(&hilo_drm, NULL, monitorizar_drm_hotplug, NULL);
+    /* DMIC — always direct from the tray (PipeWire is a session service). */
+    configurar_dmic_raw();
+
+    /* Only one keyboard monitor at a time to avoid state conflicts. */
+    if (cfg->modo_deteccion && !strcmp(cfg->modo_deteccion, "bluetooth"))
+        pthread_create(&hilo_bluetooth, NULL, monitorizar_cambios_bluetooth, NULL);
+    else if (cfg->modo_deteccion && !strcmp(cfg->modo_deteccion, "udev"))
+        pthread_create(&hilo_usb, NULL, monitorizar_cambios_teclado_usb, NULL);
+    else
+        g_warning("modo_deteccion invalido o ausente ('%s'); monitor del "
+                  "teclado no iniciado.",
+                  cfg->modo_deteccion ? cfg->modo_deteccion : "");
+
+    pthread_create(&hilo_orientacion, NULL, monitorizar_cambios_orientacion, NULL);
+    pthread_create(&hilo_drm,         NULL, monitorizar_drm_hotplug,        NULL);
 
     g_unix_signal_add(SIGTERM, on_shutdown_signal, NULL);
     g_unix_signal_add(SIGINT,  on_shutdown_signal, NULL);
     g_unix_signal_add(SIGHUP,  on_reload_config,   NULL);
 
-    gtk_main();
+    g_main_loop_run(g_loop);
+
+    g_main_loop_unref(g_loop);
     return 0;
 }
