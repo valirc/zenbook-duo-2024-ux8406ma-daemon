@@ -36,7 +36,11 @@ int set_brillo_teclado(int nivel_brillo) {
         return EXIT_FAILURE;
     }
 
-    /* Verificar y desanexar el driver del kernel si está activo en la interfaz WINDEX */
+    /* Verificar y desanexar el driver del kernel si está activo en la interfaz WINDEX.
+     * En el UX8406MA la interfaz 4 normalmente no tiene driver kernel asociado
+     * (es HID Vendor-defined del Asus Dial / backlight), pero comprobamos por
+     * defensa.  `kernel_was_attached` permite reanexar simétricamente al final. */
+    int kernel_was_attached = 0;
     if (libusb_kernel_driver_active(dev_handle, WINDEX) == 1) {
         r = libusb_detach_kernel_driver(dev_handle, WINDEX);
         if (r < 0) {
@@ -45,6 +49,22 @@ int set_brillo_teclado(int nivel_brillo) {
             libusb_exit(NULL);
             return EXIT_FAILURE;
         }
+        kernel_was_attached = 1;
+    }
+
+    /* Reclamar la interfaz: REQUERIDO antes de un control_transfer dirigido a
+     * una interfaz (bmRequestType bit recipient = INTERFACE).  Sin este claim,
+     * el kernel emite el warning "usbfs: did not claim interface N before use"
+     * (drivers/usb/core/devio.c::checkintf).  Aunque la transferencia se
+     * permite hoy, futuros kernels podrían denegarla con -EBUSY. */
+    r = libusb_claim_interface(dev_handle, WINDEX);
+    if (r < 0) {
+        fprintf(stderr, "No se pudo reclamar la interfaz %d: %s\n", WINDEX, libusb_strerror(r));
+        if (kernel_was_attached)
+            libusb_attach_kernel_driver(dev_handle, WINDEX);
+        libusb_close(dev_handle);
+        libusb_exit(NULL);
+        return EXIT_FAILURE;
     }
 
     /* Preparar el paquete de datos (16 bytes) */
@@ -81,12 +101,26 @@ int set_brillo_teclado(int nivel_brillo) {
                                               WLENGTH,
                                               1000 /* timeout ms */);
 
+    /* Liberar la interfaz reclamada — siempre, incluso si la transferencia falló.
+     * libusb_release_interface() es seguro de invocar antes de evaluar el
+     * resultado del control_transfer; el handle sigue válido. */
+    int release_r = libusb_release_interface(dev_handle, WINDEX);
+    if (release_r < 0)
+        fprintf(stderr, "Aviso: liberar interfaz %d: %s\n", WINDEX, libusb_strerror(release_r));
+
+    /* Reanexar el driver del kernel SOLO si fue desanexado por nosotros.
+     * En la interfaz 4 del UX8406MA no hay driver kernel, así que normalmente
+     * esto no se ejecuta.  Llamarlo en el caso contrario produciría -ENOENT. */
+    if (kernel_was_attached)
+        libusb_attach_kernel_driver(dev_handle, WINDEX);
+
+    /* Cleanup unificado del handle/contexto: una sola vez, antes del return. */
+    libusb_close(dev_handle);
+    libusb_exit(NULL);
+
+    /* Evaluación del resultado del control_transfer tras el cleanup. */
     if (transferred < 0) {
         fprintf(stderr, "Transferencia de control falló: %s\n", libusb_strerror(transferred));
-        // Liberar interfaz si fue reclamada (descomentando si se usó claim_interface)
-        // libusb_release_interface(dev_handle, WINDEX);
-        libusb_close(dev_handle);
-        libusb_exit(NULL);
         return EXIT_FAILURE;
     }
 
@@ -95,13 +129,6 @@ int set_brillo_teclado(int nivel_brillo) {
     } else {
         printf("Nivel de brillo de teclado definido correctamente: %d.\n", nivel_brillo);
     }
-
-    /* Reanexar el driver del kernel, si fue desanexado anteriormente */
-    r = libusb_attach_kernel_driver(dev_handle, WINDEX);
-
-    /* Cerrar el dispositivo y salir de libusb */
-    libusb_close(dev_handle);
-    libusb_exit(NULL);
 
     return EXIT_SUCCESS;
 }
